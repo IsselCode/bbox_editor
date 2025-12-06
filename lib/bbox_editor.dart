@@ -1,6 +1,6 @@
 import 'dart:typed_data';
+import 'package:bbox_editor/mjpeg_stream/mjpeg_stream_screen.dart';
 import 'package:flutter/material.dart';
-import 'package:mjpeg_stream/mjpeg_stream.dart';
 import 'exports.dart';
 
 class BBoxEditor extends StatefulWidget {
