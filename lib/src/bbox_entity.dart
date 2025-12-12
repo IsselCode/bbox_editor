@@ -8,7 +8,7 @@ typedef PointMap = Offset Function(Offset);
 typedef LenMap = double Function(double);
 
 class BBoxEntity {
-  late final int id;
+  final int id;
   Offset center;  // en VISTA
   double w, h;    // en VISTA
   double angle;   // radianes (VISTA)
@@ -19,7 +19,6 @@ class BBoxEntity {
   late double wF;
   late double hF;
   late double angleDegScreen;
-
   Color color;
 
   BBoxEntity({
@@ -30,11 +29,7 @@ class BBoxEntity {
     this.angle = 0,
     this.color = const Color(0xff0f52ff),
     this.tag,
-  }) {
-    if (id == null){
-      this.id = DateTime.now().microsecondsSinceEpoch;
-    }
-  }
+  }) : id = id ?? DateTime.now().microsecondsSinceEpoch;
 
 
 
