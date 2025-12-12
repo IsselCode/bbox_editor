@@ -44,7 +44,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   void initState() {
     super.initState();
     _boxes.addAll(widget.initialBoxes.map((b) => BBoxEntity(
-      id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color,
+      id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color, tag: b.tag
     )));
     widget.controller?.attachOverlay(
       clearAll: _clearAll,
@@ -54,7 +54,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       selected: _selectedMethod,
       setAll: (lst) { _boxes
         ..clear()
-        ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color)));
+        ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color,tag: b.tag)));
       _selected = null; _endEdit(commit:false);
       },
     );
@@ -73,7 +73,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         selected: _selectedMethod,
         setAll: (lst) { _boxes
           ..clear()
-          ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color)));
+          ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color, tag: b.tag)));
         _selected = null; _endEdit(commit:false);
         },
       );
@@ -91,7 +91,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   Future<void> _removeById(int id, CommitOrigin commitOrigin) async {
     // guarda copia para enviar delta
     // (Por si se requiere actualización)
-    final removed = _boxes.firstWhere((b)=>b.id==id, orElse: ()=>BBoxEntity(id:id,center:Offset.zero,w:0,h:0));
+    final removed = _boxes.firstWhere((b)=>b.id==id, orElse: ()=>BBoxEntity(id:id,center:Offset.zero, w:0, h:0));
 
     setState(() {
       _boxes.removeWhere((b)=>b.id==id);
@@ -201,7 +201,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           final box = _boxes.removeAt(idx);
           _boxes.add(box);               // al frente
           _selected = box.id;
-          _live = BBoxEntity(id: box.id, center: box.center, w: box.w, h: box.h, angle: box.angle, color: box.color);
+          _live = BBoxEntity(id: box.id, center: box.center, w: box.w, h: box.h, angle: box.angle, color: box.color, tag: box.tag);
         });
       }
 
@@ -220,7 +220,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         // congela el box tal como estaba al inicio del gesto
         final b = _boxes.last;
         _editBase = BBoxEntity(
-          id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color,
+          id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color, tag: b.tag
         );
         setState(() {});
         return;
@@ -239,7 +239,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     _activeHandle = Handle.none;
     _selected = null;
     _drawStart = pos;
-    _live = BBoxEntity(id: DateTime.now().microsecondsSinceEpoch, center: pos, w: 1, h: 1);
+    _live = BBoxEntity(center: pos, w: 1, h: 1);
     setState(() {});
   }
 
@@ -257,6 +257,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           h: (pos.dy - s.dy).abs().clamp(widget.minH, double.infinity),
           angle: 0,
           color: Color(0xff0f52ff),
+          tag: live.tag
         );
         break;
 
@@ -271,7 +272,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           newCenter.dx.clamp(hw, widget.viewSize.width - hw),
           newCenter.dy.clamp(hh, widget.viewSize.height - hh),
         );
-        _live = BBoxEntity(id: live.id, center: newCenter, w: live.w, h: live.h, angle: live.angle, color: b.color);
+        _live = BBoxEntity(id: live.id, center: newCenter, w: live.w, h: live.h, angle: live.angle, color: b.color, tag: b.tag);
         break;
 
       case Mode.rotate:
@@ -280,7 +281,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         var ang = (_angleStart ?? 0) + (aNow - (_startVecAngle ?? 0));
         if (ang > math.pi) ang -= 2*math.pi;
         if (ang < -math.pi) ang += 2*math.pi;
-        _live = BBoxEntity(id: live.id, center: b.center, w: b.w, h: b.h, angle: ang, color: b.color);
+        _live = BBoxEntity(id: live.id, center: b.center, w: b.w, h: b.h, angle: ang, color: b.color, tag: b.tag);
         break;
 
       case Mode.resize:
@@ -400,6 +401,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       h: newH,
       angle: base.angle,
       color: cur.color,
+      tag: cur.tag
     );
   }
 

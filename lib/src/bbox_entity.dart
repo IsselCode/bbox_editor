@@ -8,10 +8,12 @@ typedef PointMap = Offset Function(Offset);
 typedef LenMap = double Function(double);
 
 class BBoxEntity {
-  final int id;
+  late final int id;
   Offset center;  // en VISTA
   double w, h;    // en VISTA
   double angle;   // radianes (VISTA)
+  /// Solo referenciativo
+  String? tag;
 
   late Offset centerF;
   late double wF;
@@ -21,13 +23,18 @@ class BBoxEntity {
   Color color;
 
   BBoxEntity({
-    required this.id,
+    int? id,
     required this.center,
     required this.w,
     required this.h,
     this.angle = 0,
     this.color = const Color(0xff0f52ff),
-  });
+    this.tag,
+  }) {
+    if (id != null){
+      this.id = DateTime.now().microsecondsSinceEpoch;
+    }
+  }
 
 
 
@@ -45,6 +52,7 @@ class BBoxEntity {
     final cyF = (j['cy'] as num).toDouble();
     final wF  = (j['w']  as num).toDouble();
     final hF  = (j['h']  as num).toDouble();
+    final tag  = (j['tag']  as String);
 
     // ángulo en grados: 'angle_deg' (db) o 'angle_deg_cv' (worker)
     final angDeg =
@@ -73,6 +81,7 @@ class BBoxEntity {
       h: hV,
       angle: angRad,
       color: color,
+      tag: tag
     );
   }
 
@@ -159,6 +168,7 @@ extension BBoxCopy on BBoxEntity {
     double? wF,
     double? hF,
     double? angleDegScreen,
+    String? tag,
   }) {
     final clone = BBoxEntity(
       id: id ?? this.id,
@@ -167,6 +177,7 @@ extension BBoxCopy on BBoxEntity {
       h: h ?? this.h,
       angle: angle ?? this.angle,
       color: color ?? this.color,
+      tag: tag ?? this.tag,
     );
 
     // copiar también los campos "late"
