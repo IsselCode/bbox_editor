@@ -31,7 +31,7 @@ class BBoxEntity {
     this.color = const Color(0xff0f52ff),
     this.tag,
   }) {
-    if (id != null){
+    if (id == null){
       this.id = DateTime.now().microsecondsSinceEpoch;
     }
   }
