@@ -13,7 +13,7 @@ class BBoxEditor extends StatefulWidget {
   final VoidCallback? onStreamError;
   final VoidCallback? onStreamReady;
   final VoidCallback? onRetry;
-  final Uint8List? image;
+  final ImageProvider? image;
 
   final ToolPolicy policy;
   final bool logs;
@@ -141,7 +141,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
 
                     // Image
                     if (widget.image != null && widget.stream == null)
-                    Image.memory(widget.image!, fit: BoxFit.contain,),
+                    Image(image: widget.image!, fit: BoxFit.contain,),
 
                     // OVERLAY
                     if (!cameraStreamError && allowBBoxEdit)
