@@ -139,7 +139,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
                       },
                     ),
 
-                    // Image
+                    // Aceptar cualquier tipo de imagen
                     if (widget.image != null && widget.stream == null)
                     Image(image: widget.image!, fit: BoxFit.contain,),
 
