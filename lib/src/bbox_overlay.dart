@@ -2,11 +2,21 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../exports.dart';
 
+const double _resizeHandleHitRadius = 24;
+const double _resizeHandleVisualSize = 14;
+const double _rotateHandleGap = 36;
+const double _rotateHandleHitRadius = 30;
+const double _rotateControlSize = 44;
+const double _deleteControlSize = 36;
+const double _deleteControlOffset = 30;
+
 class BBoxOverlay extends StatefulWidget {
   const BBoxOverlay({
     super.key,
-    required this.viewSize,                         // tamaño del área del video (VISTA)
-    required this.camResolution,
+    required this.viewSize, // tamaño del área del video (VISTA)
+    required this.sourceResolution,
+    this.zoomScale = 1,
+    required this.isInteractive,
     this.onCommitBox, // (box, kind)
     required this.controller,
     this.initialBoxes = const [],
@@ -15,7 +25,9 @@ class BBoxOverlay extends StatefulWidget {
   });
 
   final Size viewSize;
-  final Size camResolution;
+  final Size sourceResolution;
+  final double zoomScale;
+  final bool isInteractive;
   final List<BBoxEntity> initialBoxes;
   final double minW, minH;
   final BBoxEditorController controller;
@@ -27,35 +39,78 @@ class BBoxOverlay extends StatefulWidget {
 
 class _BBoxOverlayState extends State<BBoxOverlay> {
   final List<BBoxEntity> _boxes = [];
-  int? _selected;                  // id seleccionado
+  int? _selected; // id seleccionado
   Mode _mode = Mode.idle;
   Handle _activeHandle = Handle.none;
 
   // edición
-  BBoxEntity? _live;             // copia mientras editas
-  Offset? _drawStart;              // creación
-  Offset? _dragDeltaLocal;         // drag
+  BBoxEntity? _live; // copia mientras editas
+  Offset? _drawStart; // creación
+  Offset? _dragDeltaLocal; // drag
   double? _startVecAngle, _angleStart; // rotate
 
   //
-  BBoxEntity? _editBase;   // ← box “congelado” al iniciar el gesto
+  BBoxEntity? _editBase; // ← box “congelado” al iniciar el gesto
+
+  double get _zoomScale => widget.zoomScale <= 0 ? 1 : widget.zoomScale;
+  double get _resizeHandleHitRadiusScaled =>
+      _resizeHandleHitRadius / _zoomScale;
+  double get _resizeHandleVisualSizeScaled =>
+      _resizeHandleVisualSize / _zoomScale;
+  double get _rotateHandleGapScaled => _rotateHandleGap / _zoomScale;
+  double get _rotateHandleHitRadiusScaled =>
+      _rotateHandleHitRadius / _zoomScale;
+  double get _rotateControlSizeScaled => _rotateControlSize / _zoomScale;
+  double get _deleteControlSizeScaled => _deleteControlSize / _zoomScale;
+  double get _deleteControlOffsetScaled => _deleteControlOffset / _zoomScale;
+  double get _controlIconSizeScaled => 20 / _zoomScale;
+  double get _selectedStrokeWidthScaled => 2.5 / _zoomScale;
+  double get _boxStrokeWidthScaled => 1.6 / _zoomScale;
+  double get _handleStrokeWidthScaled => 2 / _zoomScale;
+  double get _rotateOutlineStrokeWidthScaled => 1.5 / _zoomScale;
+  double get _liveStrokeWidthScaled => 2 / _zoomScale;
+  double get _rotateControlPaddingScaled => 5 / _zoomScale;
 
   @override
   void initState() {
     super.initState();
-    _boxes.addAll(widget.initialBoxes.map((b) => BBoxEntity(
-      id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color, tag: b.tag
-    )));
-    widget.controller?.attachOverlay(
+    _boxes.addAll(
+      widget.initialBoxes.map(
+        (b) => BBoxEntity(
+          id: b.id,
+          center: b.center,
+          w: b.w,
+          h: b.h,
+          angle: b.angle,
+          color: b.color,
+          tag: b.tag,
+        ),
+      ),
+    );
+    widget.controller.attachOverlay(
       clearAll: _clearAll,
       remove: _removeById,
       add: _addBox,
       update: _updateBox,
       selected: _selectedMethod,
-      setAll: (lst) { _boxes
-        ..clear()
-        ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color,tag: b.tag)));
-      _selected = null; _endEdit(commit:false);
+      setAll: (lst) {
+        _boxes
+          ..clear()
+          ..addAll(
+            lst.map(
+              (b) => BBoxEntity(
+                id: b.id,
+                center: b.center,
+                w: b.w,
+                h: b.h,
+                angle: b.angle,
+                color: b.color,
+                tag: b.tag,
+              ),
+            ),
+          );
+        _selected = null;
+        _endEdit(commit: false);
       },
     );
   }
@@ -63,18 +118,35 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   @override
   void didUpdateWidget(covariant BBoxOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.isInteractive && !widget.isInteractive) {
+      _cancelEdit();
+    }
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller?.detachOverlay();
-      widget.controller?.attachOverlay(
+      oldWidget.controller.detachOverlay();
+      widget.controller.attachOverlay(
         clearAll: _clearAll,
         remove: _removeById,
         add: _addBox,
         update: _updateBox,
         selected: _selectedMethod,
-        setAll: (lst) { _boxes
-          ..clear()
-          ..addAll(lst.map((b)=>BBoxEntity(id:b.id,center:b.center,w:b.w,h:b.h,angle:b.angle,color:b.color, tag: b.tag)));
-        _selected = null; _endEdit(commit:false);
+        setAll: (lst) {
+          _boxes
+            ..clear()
+            ..addAll(
+              lst.map(
+                (b) => BBoxEntity(
+                  id: b.id,
+                  center: b.center,
+                  w: b.w,
+                  h: b.h,
+                  angle: b.angle,
+                  color: b.color,
+                  tag: b.tag,
+                ),
+              ),
+            );
+          _selected = null;
+          _endEdit(commit: false);
         },
       );
     }
@@ -82,51 +154,61 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   @override
   void dispose() {
-    widget.controller?.detachOverlay();
+    widget.controller.detachOverlay();
     super.dispose();
   }
 
   // --- API interna para controller ---
-  Future<void> _clearAll() async { setState(() { _boxes.clear(); _selected = null; _cancelEdit(); }); }
+  Future<void> _clearAll() async {
+    setState(() {
+      _boxes.clear();
+      _selected = null;
+      _cancelEdit();
+    });
+  }
+
   Future<void> _removeById(int id, CommitOrigin commitOrigin) async {
     // guarda copia para enviar delta
     // (Por si se requiere actualización)
-    final removed = _boxes.firstWhere((b)=>b.id==id, orElse: ()=>BBoxEntity(id:id,center:Offset.zero, w:0, h:0));
-
     setState(() {
-      _boxes.removeWhere((b)=>b.id==id);
-      if (_selected==id) _selected=null;
+      _boxes.removeWhere((b) => b.id == id);
+      if (_selected == id) _selected = null;
       _cancelEdit();
     });
 
     // Enviar commit al padre cuando la actualización viene del controller
-      widget.onCommitBox?.call(BoxDeleted(id: id, origin: commitOrigin));
+    widget.onCommitBox?.call(BoxDeleted(id: id, origin: commitOrigin));
   }
+
   Future<void> _addBox(BBoxEntity b, CommitOrigin commitOrigin) async {
     setState(() {
-      final mapper = FitCoverMapper(widget.viewSize, widget.camResolution);
+      final mapper = FitCoverMapper(widget.viewSize, widget.sourceResolution);
       b.setFrameCoords(mapper);
       _boxes.add(b);
       _selected = b.id;
     });
-      // Enviar commit al padre cuando la actualización viene del controller
-      widget.onCommitBox?.call(BoxCreated(box: b, origin: commitOrigin));
-    }
-  Future<void> _updateBox(int id, BBoxEntity box, CommitOrigin commitOrigin) async {
+    // Enviar commit al padre cuando la actualización viene del controller
+    widget.onCommitBox?.call(BoxCreated(box: b, origin: commitOrigin));
+  }
+
+  Future<void> _updateBox(
+    int id,
+    BBoxEntity box,
+    CommitOrigin commitOrigin,
+  ) async {
     setState(() {
-      final mapper = FitCoverMapper(widget.viewSize, widget.camResolution);
+      final mapper = FitCoverMapper(widget.viewSize, widget.sourceResolution);
       box.setFrameCoords(mapper);
-      int ibbox = _boxes.indexWhere((element) => element.id == box.id,);
+      int ibbox = _boxes.indexWhere((element) => element.id == box.id);
       _boxes[ibbox] = box;
     });
 
     // Se envia el commit
     widget.onCommitBox?.call(BoxUpdated(box: box, origin: commitOrigin));
   }
+
   Future<void> _selectedMethod(int? id, CommitOrigin commitOrigin) async {
-
-    if (id != null ){
-
+    if (id != null) {
       // Trae el box al frente y solo selección (sin live ni edición)
       final idx = _boxes.indexWhere((b) => b.id == id);
       if (idx != -1) {
@@ -138,7 +220,6 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       _live = null;
       _mode = Mode.idle;
       _activeHandle = Handle.none;
-
     } else {
       _selected = null;
       _live = null;
@@ -150,58 +231,118 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   }
 
   ({int id, Handle handle, bool rotate, double dist})? _hitTest(Offset pos) {
-    const handleR = 16.0;    // para resize
-    const rotateR = 22.0;    // 🔁 para rotación (overlay level)
-    final candidates = <({int id,Handle handle,bool rotate,double dist})>[];
+    final candidates = <({int id, Handle handle, bool rotate, double dist})>[];
 
     for (final b in _boxes) {
       // ROTATE (overlay, no botón)
-      final rh = b.rotateHandle();
+      final rh = b.rotateHandle(_rotateHandleGapScaled);
       final dr = (rh - pos).distance;
-      if (dr <= rotateR) candidates.add((id:b.id, handle:Handle.none, rotate:true, dist:dr));
+      if (dr <= _rotateHandleHitRadiusScaled) {
+        candidates.add((id: b.id, handle: Handle.none, rotate: true, dist: dr));
+      }
 
       // RESIZE handles
       final hs = b.handlePositions();
       hs.forEach((h, p) {
         final d = (p - pos).distance;
-        if (d <= handleR) candidates.add((id:b.id, handle:h, rotate:false, dist:d));
+        if (d <= _resizeHandleHitRadiusScaled) {
+          candidates.add((id: b.id, handle: h, rotate: false, dist: d));
+        }
       });
 
       // DRAG interior
       if (b.contains(pos)) {
-        candidates.add((id:b.id, handle:Handle.none, rotate:false, dist:handleR));
+        candidates.add((
+          id: b.id,
+          handle: Handle.none,
+          rotate: false,
+          dist: _resizeHandleHitRadiusScaled,
+        ));
       }
     }
     if (candidates.isEmpty) return null;
-    candidates.sort((a,b)=>a.dist.compareTo(b.dist));
+    candidates.sort((a, b) => a.dist.compareTo(b.dist));
     return candidates.first;
+  }
+
+  Offset? _rotateControlCenterFor(BBoxEntity? box) {
+    if (box == null) return null;
+    return _clampControlCenter(
+      box.rotateHandle(_rotateHandleGapScaled),
+      _rotateControlSizeScaled,
+    );
+  }
+
+  Offset? _deleteControlCenterFor(BBoxEntity? box) {
+    if (box == null) return null;
+    final tr = box.handlePositions()[Handle.tr];
+    if (tr == null) return null;
+    return _clampControlCenter(
+      tr.translate(_deleteControlOffsetScaled, -_deleteControlOffsetScaled),
+      _deleteControlSizeScaled,
+    );
+  }
+
+  bool _isInsideControl(Offset pos, Offset? center, double size) {
+    if (center == null) return false;
+    return (center - pos).distance <= size / 2;
   }
 
   // --- Gestos ---
   void _onTapDown(TapDownDetails d) async {
-    final pos = d.localPosition; // si estás usando matriz de IV, aquí iría _toScene(pos)
+    if (!widget.isInteractive) return;
+    final pos = d.localPosition;
+    if (_isInsideControl(
+      pos,
+      _deleteControlCenterFor(_selectedBox),
+      _deleteControlSizeScaled,
+    )) {
+      return;
+    }
     final hit = _hitTest(pos);
 
     if (hit != null) {
-      widget.controller.setSelectedBox(hit.id, commitOrigin: CommitOrigin.overlay);
+      widget.controller.setSelectedBox(
+        hit.id,
+        commitOrigin: CommitOrigin.overlay,
+      );
     } else {
-      widget.controller.setSelectedBox(null, commitOrigin: CommitOrigin.overlay);
+      widget.controller.setSelectedBox(
+        null,
+        commitOrigin: CommitOrigin.overlay,
+      );
     }
   }
 
   void _onPanStart(DragStartDetails d) {
+    if (!widget.isInteractive) return;
     final pos = d.localPosition;
+    if (_isInsideControl(
+      pos,
+      _deleteControlCenterFor(_selectedBox),
+      _deleteControlSizeScaled,
+    )) {
+      return;
+    }
     final hit = _hitTest(pos);
 
     if (hit != null) {
       // selecciona y trae al frente
-      final idx = _boxes.indexWhere((b)=>b.id==hit.id);
+      final idx = _boxes.indexWhere((b) => b.id == hit.id);
       if (idx != -1) {
         setState(() {
           final box = _boxes.removeAt(idx);
-          _boxes.add(box);               // al frente
+          _boxes.add(box); // al frente
           _selected = box.id;
-          _live = BBoxEntity(id: box.id, center: box.center, w: box.w, h: box.h, angle: box.angle, color: box.color, tag: box.tag);
+          _live = BBoxEntity(
+            id: box.id,
+            center: box.center,
+            w: box.w,
+            h: box.h,
+            angle: box.angle,
+            color: box.color,
+            tag: box.tag,
+          );
         });
       }
 
@@ -220,7 +361,13 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         // congela el box tal como estaba al inicio del gesto
         final b = _boxes.last;
         _editBase = BBoxEntity(
-          id: b.id, center: b.center, w: b.w, h: b.h, angle: b.angle, color: b.color, tag: b.tag
+          id: b.id,
+          center: b.center,
+          w: b.w,
+          h: b.h,
+          angle: b.angle,
+          color: b.color,
+          tag: b.tag,
         );
         setState(() {});
         return;
@@ -235,6 +382,10 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     }
 
     // fuera de todos -> crear nuevo
+    if (!widget.controller.canCreateBoxes) {
+      _cancelEdit();
+      return;
+    }
     _mode = Mode.draw;
     _activeHandle = Handle.none;
     _selected = null;
@@ -244,20 +395,23 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   }
 
   void _onPanUpdate(DragUpdateDetails d) {
+    if (!widget.isInteractive) return;
     final pos = d.localPosition;
-    final live = _live; if (live == null) return;
+    final live = _live;
+    if (live == null) return;
 
     switch (_mode) {
       case Mode.draw:
         final s = _drawStart!;
         final cx = (s.dx + pos.dx) / 2, cy = (s.dy + pos.dy) / 2;
-        _live = BBoxEntity(id: live.id,
+        _live = BBoxEntity(
+          id: live.id,
           center: Offset(cx, cy),
           w: (pos.dx - s.dx).abs().clamp(widget.minW, double.infinity),
           h: (pos.dy - s.dy).abs().clamp(widget.minH, double.infinity),
           angle: 0,
           color: Color(0xff0f52ff),
-          tag: live.tag
+          tag: live.tag,
         );
         break;
 
@@ -265,28 +419,54 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         final b = _boxes.last; // seleccionado al frente
         final local = _dragDeltaLocal ?? Offset.zero;
         final c = math.cos(b.angle), s = math.sin(b.angle);
-        final worldDelta = Offset(local.dx * c - local.dy * s, local.dx * s + local.dy * c);
+        final worldDelta = Offset(
+          local.dx * c - local.dy * s,
+          local.dx * s + local.dy * c,
+        );
         var newCenter = pos - worldDelta;
         final hw = live.w / 2, hh = live.h / 2;
         newCenter = Offset(
           newCenter.dx.clamp(hw, widget.viewSize.width - hw),
           newCenter.dy.clamp(hh, widget.viewSize.height - hh),
         );
-        _live = BBoxEntity(id: live.id, center: newCenter, w: live.w, h: live.h, angle: live.angle, color: b.color, tag: b.tag);
+        _live = BBoxEntity(
+          id: live.id,
+          center: newCenter,
+          w: live.w,
+          h: live.h,
+          angle: live.angle,
+          color: b.color,
+          tag: b.tag,
+        );
         break;
 
       case Mode.rotate:
         final b = _boxes.last;
         final aNow = math.atan2(pos.dy - b.center.dy, pos.dx - b.center.dx);
         var ang = (_angleStart ?? 0) + (aNow - (_startVecAngle ?? 0));
-        if (ang > math.pi) ang -= 2*math.pi;
-        if (ang < -math.pi) ang += 2*math.pi;
-        _live = BBoxEntity(id: live.id, center: b.center, w: b.w, h: b.h, angle: ang, color: b.color, tag: b.tag);
+        if (ang > math.pi) ang -= 2 * math.pi;
+        if (ang < -math.pi) ang += 2 * math.pi;
+        _live = BBoxEntity(
+          id: live.id,
+          center: b.center,
+          w: b.w,
+          h: b.h,
+          angle: ang,
+          color: b.color,
+          tag: b.tag,
+        );
         break;
 
       case Mode.resize:
-        final base = _editBase ?? _boxes.last;  // ← base congelada
-        _live = _resizeFromHandle(base, live, _activeHandle, pos, widget.minW, widget.minH);
+        final base = _editBase ?? _boxes.last; // ← base congelada
+        _live = _resizeFromHandle(
+          base,
+          live,
+          _activeHandle,
+          pos,
+          widget.minW,
+          widget.minH,
+        );
         break;
 
       case Mode.idle:
@@ -295,12 +475,22 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     setState(() {});
   }
 
-  Future<void> _onPanEnd() async => _endEdit(commit: true);
+  Future<void> _onPanEnd() async {
+    if (!widget.isInteractive) {
+      _cancelEdit();
+      return;
+    }
+    await _endEdit(commit: true);
+  }
 
   void _cancelEdit() {
-    _mode = Mode.idle; _activeHandle = Handle.none;
-    _live = null; _drawStart = null; _dragDeltaLocal = null;
-    _startVecAngle = null; _angleStart = null;
+    _mode = Mode.idle;
+    _activeHandle = Handle.none;
+    _live = null;
+    _drawStart = null;
+    _dragDeltaLocal = null;
+    _startVecAngle = null;
+    _angleStart = null;
     _editBase = null;
   }
 
@@ -308,33 +498,40 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     BBoxEntity? live = _live;
 
     if (commit && live != null) {
-      final idx = _boxes.indexWhere((b)=>b.id==live.id);
+      final idx = _boxes.indexWhere((b) => b.id == live.id);
       final isCreate = idx == -1;
 
       if (isCreate) {
+        if (!widget.controller.canCreateBoxes) {
+          _cancelEdit();
+          return;
+        }
         widget.controller.addBox(live, commitOrigin: CommitOrigin.overlay);
       } else {
         _boxes[idx] = live;
-        widget.controller.updateBox(live.id, live, commitOrigin: CommitOrigin.overlay);
+        widget.controller.updateBox(
+          live.id,
+          live,
+          commitOrigin: CommitOrigin.overlay,
+        );
       }
     }
     _cancelEdit();
   }
 
-
   // --------- resize (en ejes locales) ---------
   BBoxEntity _resizeFromHandle(
-      BBoxEntity base,   // caja CONGELADA al panStart (ejes fijos)
-      BBoxEntity cur,    // copia que vamos mostrando
-      Handle h,
-      Offset posWorld,
-      double minW,
-      double minH,
-      ) {
+    BBoxEntity base, // caja CONGELADA al panStart (ejes fijos)
+    BBoxEntity cur, // copia que vamos mostrando
+    Handle h,
+    Offset posWorld,
+    double minW,
+    double minH,
+  ) {
     // Cursor en COORDENADAS LOCALES del base
     final p = base.worldToLocal(posWorld);
 
-    final hwB = base.w / 2, hhB = base.h / 2;   // semiejes del BASE
+    final hwB = base.w / 2, hhB = base.h / 2; // semiejes del BASE
     final minHW = minW / 2, minHH = minH / 2;
 
     // Nuevo centro en local (acumulado por ejes)
@@ -346,44 +543,65 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     // Mantienen fijo el borde opuesto del BASE.
     void dragRight() {
       // Borde fijo: x = -hwB ; borde nuevo: x = p.dx
-      final px = math.max(p.dx, 2*minHW - hwB); // clamp para tamaño mínimo
-      hw = (px + hwB) / 2.0;                    // semieje nuevo
-      cx = (px - hwB) / 2.0;                    // centro local en X
+      final px = math.max(p.dx, 2 * minHW - hwB); // clamp para tamaño mínimo
+      hw = (px + hwB) / 2.0; // semieje nuevo
+      cx = (px - hwB) / 2.0; // centro local en X
     }
 
     void dragLeft() {
       // Borde fijo: x = +hwB ; borde nuevo: x = p.dx (negativo)
-      final px = math.min(p.dx, hwB - 2*minHW);
+      final px = math.min(p.dx, hwB - 2 * minHW);
       hw = (hwB - px) / 2.0;
       cx = (px + hwB) / 2.0;
     }
 
     void dragBottom() {
       // Borde fijo: y = -hhB ; borde nuevo: y = p.dy
-      final py = math.max(p.dy, 2*minHH - hhB);
+      final py = math.max(p.dy, 2 * minHH - hhB);
       hh = (py + hhB) / 2.0;
       cy = (py - hhB) / 2.0;
     }
 
     void dragTop() {
       // Borde fijo: y = +hhB ; borde nuevo: y = p.dy (negativo)
-      final py = math.min(p.dy, hhB - 2*minHH);
+      final py = math.min(p.dy, hhB - 2 * minHH);
       hh = (hhB - py) / 2.0;
       cy = (py + hhB) / 2.0;
     }
 
     switch (h) {
-      case Handle.r:  dragRight(); break;
-      case Handle.l:  dragLeft();  break;
-      case Handle.b:  dragBottom(); break;
-      case Handle.t:  dragTop();    break;
+      case Handle.r:
+        dragRight();
+        break;
+      case Handle.l:
+        dragLeft();
+        break;
+      case Handle.b:
+        dragBottom();
+        break;
+      case Handle.t:
+        dragTop();
+        break;
 
-      case Handle.tr: dragRight(); dragTop(); break;
-      case Handle.br: dragRight(); dragBottom(); break;
-      case Handle.tl: dragLeft();  dragTop(); break;
-      case Handle.bl: dragLeft();  dragBottom(); break;
+      case Handle.tr:
+        dragRight();
+        dragTop();
+        break;
+      case Handle.br:
+        dragRight();
+        dragBottom();
+        break;
+      case Handle.tl:
+        dragLeft();
+        dragTop();
+        break;
+      case Handle.bl:
+        dragLeft();
+        dragBottom();
+        break;
 
-      case Handle.none: break;
+      case Handle.none:
+        break;
     }
 
     // Centro LOCAL → MUNDO según ángulo del BASE
@@ -401,7 +619,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       h: newH,
       angle: base.angle,
       color: cur.color,
-      tag: cur.tag
+      tag: cur.tag,
     );
   }
 
@@ -409,7 +627,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   BBoxEntity? get _selectedBox {
     if (_selected == null) return null;
-    final idx = _boxes.indexWhere((b)=>b.id==_selected);
+    final idx = _boxes.indexWhere((b) => b.id == _selected);
     return idx == -1 ? null : _boxes[idx];
   }
 
@@ -419,19 +637,50 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     widget.controller.removeBox(id, commitOrigin: CommitOrigin.overlay);
   }
 
+  Offset _clampControlCenter(Offset center, double size) {
+    final radius = size / 2;
+    return Offset(
+      center.dx.clamp(radius, widget.viewSize.width - radius),
+      center.dy.clamp(radius, widget.viewSize.height - radius),
+    );
+  }
+
+  Widget _buildFloatingControl({
+    required VoidCallback? onPressed,
+    required IconData icon,
+    required Color iconColor,
+    required Color backgroundColor,
+    double size = _deleteControlSize,
+    double iconSize = 20,
+    bool ignorePointer = false,
+  }) {
+    return IgnorePointer(
+      ignoring: ignorePointer,
+      child: Material(
+        color: backgroundColor,
+        shape: const CircleBorder(),
+        elevation: 2,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: IconButton(
+            onPressed: onPressed,
+            padding: EdgeInsets.zero,
+            splashRadius: size / 2,
+            constraints: BoxConstraints.tightFor(width: size, height: size),
+            icon: Icon(icon, color: iconColor, size: iconSize),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sel = _selectedBox;
     // puntos de referencia del bbox seleccionado
-    Offset? rotatePos, deletePos;
-    if (sel != null) {
-      rotatePos = sel.rotateHandle(); // arriba al centro
-      final tr = sel.handlePositions()[Handle.tr]; // esquina superior derecha
-      if (tr != null) {
-        // levanta un poco el botón para no tapar la manija
-        deletePos = tr.translate(0, -20);
-      }
-    }
+    final rotatePos = _rotateControlCenterFor(sel);
+    final deletePos = _deleteControlCenterFor(sel);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -447,40 +696,80 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
               boxes: _boxes,
               selectedId: _selected,
               live: _live,
+              resizeHandleVisualSize: _resizeHandleVisualSizeScaled,
+              rotateHandleGap: _rotateHandleGapScaled,
+              rotateControlSize: _rotateControlSizeScaled,
+              rotateControlPadding: _rotateControlPaddingScaled,
+              selectedStrokeWidth: _selectedStrokeWidthScaled,
+              boxStrokeWidth: _boxStrokeWidthScaled,
+              handleStrokeWidth: _handleStrokeWidthScaled,
+              rotateOutlineStrokeWidth: _rotateOutlineStrokeWidthScaled,
+              liveStrokeWidth: _liveStrokeWidthScaled,
             ),
           ),
 
           if (sel != null && rotatePos != null)
-          Positioned(
-            left: rotatePos.dx - 10,
-            top: rotatePos.dy - 15,
-            child: IgnorePointer(
-              child: Icon(Icons.crop_rotate, size: 20, color: Colors.white,)
+            Positioned(
+              left: rotatePos.dx - (_rotateControlSizeScaled / 2),
+              top: rotatePos.dy - (_rotateControlSizeScaled / 2),
+              child: _buildFloatingControl(
+                onPressed: null,
+                icon: Icons.crop_rotate,
+                iconColor: Colors.white,
+                backgroundColor: Colors.black.withOpacity(0.72),
+                size: _rotateControlSizeScaled,
+                iconSize: _controlIconSizeScaled,
+                ignorePointer: true,
+              ),
             ),
-          ),
 
           if (sel != null && deletePos != null)
             Positioned(
-              left: deletePos.dx - 18,
-              top: deletePos.dy - 18,
-              child: IconButton(
+              left: deletePos.dx - (_deleteControlSizeScaled / 2),
+              top: deletePos.dy - (_deleteControlSizeScaled / 2),
+              child: _buildFloatingControl(
                 onPressed: _deleteSelected,
-                icon: Icon(Icons.delete_outline, color: Colors.red, size: 20,),
+                icon: Icons.delete_outline,
+                iconColor: Colors.white,
+                backgroundColor: const Color(0xFFE5484D),
+                size: _deleteControlSizeScaled,
+                iconSize: _controlIconSizeScaled,
               ),
             ),
         ],
       ),
     );
   }
-
 }
 
 class _MultiPainter extends CustomPainter {
   final List<BBoxEntity> boxes;
   final int? selectedId;
   final BBoxEntity? live;
+  final double resizeHandleVisualSize;
+  final double rotateHandleGap;
+  final double rotateControlSize;
+  final double rotateControlPadding;
+  final double selectedStrokeWidth;
+  final double boxStrokeWidth;
+  final double handleStrokeWidth;
+  final double rotateOutlineStrokeWidth;
+  final double liveStrokeWidth;
 
-  _MultiPainter({required this.boxes, this.selectedId, this.live});
+  _MultiPainter({
+    required this.boxes,
+    this.selectedId,
+    this.live,
+    required this.resizeHandleVisualSize,
+    required this.rotateHandleGap,
+    required this.rotateControlSize,
+    required this.rotateControlPadding,
+    required this.selectedStrokeWidth,
+    required this.boxStrokeWidth,
+    required this.handleStrokeWidth,
+    required this.rotateOutlineStrokeWidth,
+    required this.liveStrokeWidth,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -490,32 +779,59 @@ class _MultiPainter extends CustomPainter {
       final paintBox = Paint()
         ..color = b.color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = isSel ? 2.5 : 1.6;
+        ..strokeWidth = isSel ? selectedStrokeWidth : boxStrokeWidth;
 
       // sombra fuera
       if (isSel) {
         final overlay = Paint()..color = Colors.black.withOpacity(0.25);
         final full = Path()..addRect(Offset.zero & size);
-        canvas.drawPath(Path.combine(PathOperation.difference, full, path), overlay);
+        canvas.drawPath(
+          Path.combine(PathOperation.difference, full, path),
+          overlay,
+        );
       }
       canvas.drawPath(path, paintBox);
 
       if (isSel) {
         // handles
         final hs = b.handlePositions();
-        final ph = Paint()..color = Colors.white..style = PaintingStyle.fill;
+        final fillPaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+        final strokePaint = Paint()
+          ..color = b.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = handleStrokeWidth;
         for (final p in hs.values) {
-          canvas.drawRect(Rect.fromCenter(center: p, width: 8, height: 8), ph);
+          canvas.drawCircle(p, resizeHandleVisualSize / 2, fillPaint);
+          canvas.drawCircle(p, resizeHandleVisualSize / 2, strokePaint);
         }
-      }
 
+        final rotateHandle = b.rotateHandle(rotateHandleGap);
+        canvas.drawCircle(
+          rotateHandle,
+          math.max(0, (rotateControlSize / 2) - rotateControlPadding),
+          fillPaint,
+        );
+        canvas.drawCircle(
+          rotateHandle,
+          math.max(0, (rotateControlSize / 2) - rotateControlPadding),
+          Paint()
+            ..color = Colors.black.withOpacity(0.35)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = rotateOutlineStrokeWidth,
+        );
+      }
     }
     if (live != null) {
       final path = _obbPath(live!);
-      canvas.drawPath(path, Paint()
-        ..color = Color(0xff0f52ff)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = Color(0xff0f52ff)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = liveStrokeWidth,
+      );
     }
   }
 
@@ -526,6 +842,16 @@ class _MultiPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _MultiPainter old) =>
-      old.boxes != boxes || old.selectedId != selectedId || old.live != live;
+      old.boxes != boxes ||
+      old.selectedId != selectedId ||
+      old.live != live ||
+      old.resizeHandleVisualSize != resizeHandleVisualSize ||
+      old.rotateHandleGap != rotateHandleGap ||
+      old.rotateControlSize != rotateControlSize ||
+      old.rotateControlPadding != rotateControlPadding ||
+      old.selectedStrokeWidth != selectedStrokeWidth ||
+      old.boxStrokeWidth != boxStrokeWidth ||
+      old.handleStrokeWidth != handleStrokeWidth ||
+      old.rotateOutlineStrokeWidth != rotateOutlineStrokeWidth ||
+      old.liveStrokeWidth != liveStrokeWidth;
 }
-

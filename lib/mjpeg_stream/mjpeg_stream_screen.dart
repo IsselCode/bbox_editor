@@ -38,8 +38,8 @@ class MJPEGStreamScreen extends StatefulWidget {
     this.width = double.infinity,
     this.height = 300.0,
     this.timeout = const Duration(seconds: 5),
-    // this.decoration,
 
+    // this.decoration,
     this.borderRadius = 15,
     this.showLogs = true,
     this.showWatermark = false,
@@ -61,13 +61,16 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
   late final String stream;
   late final MjpegPreprocessor preprocessor;
   ValueNotifier<MemoryImage?> image = ValueNotifier<MemoryImage?>(null);
-  ValueNotifier<List<dynamic>?> errorState =
-  ValueNotifier<List<dynamic>?>(null);
+  ValueNotifier<List<dynamic>?> errorState = ValueNotifier<List<dynamic>?>(
+    null,
+  );
   ValueNotifier<bool> showLiveIcon = ValueNotifier<bool>(false);
   ValueNotifier<bool> showLodingIndicator = ValueNotifier<bool>(true);
-  ValueNotifier<bool> blurSensitiveContent =
-  ValueNotifier<bool>(false); // Add blur state
+  ValueNotifier<bool> blurSensitiveContent = ValueNotifier<bool>(
+    false,
+  ); // Add blur state
   StreamSubscription? _subscription;
+  bool _didNotifyStart = false;
 
   @override
   void initState() {
@@ -92,6 +95,7 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
 
   Future<void> _startStream() async {
     try {
+      _didNotifyStart = false;
       final request = Request("GET", Uri.parse(stream));
       final response = await Client().send(request).timeout(widget.timeout);
 
@@ -100,44 +104,51 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
         showLiveIcon.value = true;
         showLodingIndicator.value = false;
         List<int> _carry = [];
-        _subscription = response.stream.listen((chunk) {
-          if (_carry.isNotEmpty && _carry.last == 0xFF && chunk.first == 0xD9) {
-            _carry.add(chunk.first);
-            _sendImage(_carry);
-            _carry = [];
-          }
-
-          for (var i = 0; i < chunk.length - 1; i++) {
-            final d = chunk[i];
-            final d1 = chunk[i + 1];
-
-            if (d == 0xFF && d1 == 0xD8) {
-              _carry = [d];
-            } else if (d == 0xFF && d1 == 0xD9 && _carry.isNotEmpty) {
-              _carry.addAll([d, d1]);
+        _subscription = response.stream.listen(
+          (chunk) {
+            if (_carry.isNotEmpty &&
+                _carry.last == 0xFF &&
+                chunk.first == 0xD9) {
+              _carry.add(chunk.first);
               _sendImage(_carry);
               _carry = [];
-            } else if (_carry.isNotEmpty) {
-              _carry.add(d);
-              if (i == chunk.length - 2) {
-                _carry.add(d1);
+            }
+
+            for (var i = 0; i < chunk.length - 1; i++) {
+              final d = chunk[i];
+              final d1 = chunk[i + 1];
+
+              if (d == 0xFF && d1 == 0xD8) {
+                _carry = [d];
+              } else if (d == 0xFF && d1 == 0xD9 && _carry.isNotEmpty) {
+                _carry.addAll([d, d1]);
+                _sendImage(_carry);
+                _carry = [];
+              } else if (_carry.isNotEmpty) {
+                _carry.add(d);
+                if (i == chunk.length - 2) {
+                  _carry.add(d1);
+                }
               }
             }
-          }
-          // callback de inicio de camara agregado
-          widget.onStartCamera?.call();
-        }, onError: (error, stack) {
-          if (widget.showLogs) print("Stream error: $error");
-          errorState.value = [error, stack];
-          image.value = null;
-          showLiveIcon.value = false;
-          showLodingIndicator.value = false;
-          // callback de error agregado
-          widget.onError?.call();
-        }, cancelOnError: true);
+          },
+          onError: (error, stack) {
+            if (widget.showLogs) print("Stream error: $error");
+            errorState.value = [error, stack];
+            image.value = null;
+            showLiveIcon.value = false;
+            showLodingIndicator.value = false;
+            // callback de error agregado
+            widget.onError?.call();
+          },
+          cancelOnError: true,
+        );
       } else {
-        if (widget.showLogs) print('Stream returned error status: ${response.statusCode}');
-        errorState.value = [HttpException('Stream returned ${response.statusCode} status')];
+        if (widget.showLogs)
+          print('Stream returned error status: ${response.statusCode}');
+        errorState.value = [
+          HttpException('Stream returned ${response.statusCode} status'),
+        ];
         image.value = null;
         showLiveIcon.value = false;
         showLodingIndicator.value = false;
@@ -170,15 +181,21 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
     final List<int>? imageData = preprocessor.process(chunks);
     if (imageData != null) {
       // Check if the frame has valid JPEG data
-      if (imageData.length > 10 && imageData[0] == 0xFF && imageData[1] == 0xD8 && imageData.last == 0xD9) {
+      if (imageData.length > 10 &&
+          imageData[0] == 0xFF &&
+          imageData[1] == 0xD8 &&
+          imageData.last == 0xD9) {
         image.value = MemoryImage(Uint8List.fromList(imageData));
+        if (!_didNotifyStart) {
+          _didNotifyStart = true;
+          widget.onStartCamera?.call();
+        }
         if (widget.showLogs) print("Image processed and updated.");
       } else {
         if (widget.showLogs) print("Invalid JPEG frame detected.");
       }
     }
   }
-
 
   // Toggle blur effect
   void _toggleBlur() {
@@ -222,17 +239,20 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
                       Text(
                         'Stream Error',
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold),
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       SizedBox(height: 15),
                       CupertinoButton(
                         onPressed: _reloadStream,
                         child: Text("Retry"),
                         color: CupertinoColors.activeBlue,
-                        padding:
-                        EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+                        padding: EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 20,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ],
@@ -255,7 +275,6 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
                         height: widget.height,
                         fit: widget.fit,
                         gaplessPlayback: true,
-
                       ),
                     ),
                   ),
@@ -264,8 +283,9 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
                     builder: (context, blur, child) {
                       if (blur && widget.blurSensitiveContent) {
                         return ClipRRect(
-                          borderRadius:
-                          BorderRadius.circular(widget.borderRadius!),
+                          borderRadius: BorderRadius.circular(
+                            widget.borderRadius!,
+                          ),
                           child: BackdropFilter(
                             filter: ImageFilter.blur(sigmaX: 5.0, sigmaY: 5.0),
                             child: Container(
@@ -274,8 +294,12 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
                               child: CupertinoButton(
                                 onPressed: _toggleBlur,
                                 child: CircleAvatar(
-                                  backgroundColor:
-                                  Color.fromARGB(44, 255, 255, 255),
+                                  backgroundColor: Color.fromARGB(
+                                    44,
+                                    255,
+                                    255,
+                                    255,
+                                  ),
                                   child: Icon(
                                     blurSensitiveContent.value
                                         ? Icons.visibility_off
@@ -312,17 +336,20 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
                       Text(
                         'Stream Error',
                         style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold),
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       SizedBox(height: 15),
                       CupertinoButton(
                         onPressed: _reloadStream,
                         child: Text("Retry"),
                         color: CupertinoColors.activeBlue,
-                        padding:
-                        EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+                        padding: EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 20,
+                        ),
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ],
@@ -364,7 +391,8 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
             Positioned(
               bottom: 10,
               right: 10,
-              child: widget.watermarkWidget ??
+              child:
+                  widget.watermarkWidget ??
                   Text(
                     widget.watermarkText,
                     style: TextStyle(

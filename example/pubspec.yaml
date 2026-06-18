@@ -1,0 +1,14 @@
+name: bbox_editor_example
+publish_to: none
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  bbox_editor:
+    path: ..
+
+flutter:
+  uses-material-design: true
