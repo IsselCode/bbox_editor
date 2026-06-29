@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'bbox_camera_config.dart';
 import 'bbox_editor_controller.dart';
 import 'bbox_editor_enums.dart';
+import 'bbox_frame_data.dart';
 
 class BBoxCameraSurface extends StatefulWidget {
   const BBoxCameraSurface({
@@ -18,6 +19,8 @@ class BBoxCameraSurface extends StatefulWidget {
     required this.onEditableFrameChanged,
     required this.onError,
     required this.onResumePreview,
+    this.onLiveFrame,
+    this.onCapturedFrame,
   });
 
   final BBoxEditorController controller;
@@ -26,6 +29,8 @@ class BBoxCameraSurface extends StatefulWidget {
   final ValueChanged<bool> onEditableFrameChanged;
   final ValueChanged<Object> onError;
   final VoidCallback onResumePreview;
+  final ValueChanged<BBoxFrameData>? onLiveFrame;
+  final ValueChanged<BBoxFrameData>? onCapturedFrame;
 
   @override
   State<BBoxCameraSurface> createState() => _BBoxCameraSurfaceState();
@@ -33,6 +38,7 @@ class BBoxCameraSurface extends StatefulWidget {
 
 class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     with WidgetsBindingObserver {
+  final Object _cameraBindingOwner = Object();
   CameraController? _cameraController;
   Uint8List? _capturedBytes;
   Size? _capturedSize;
@@ -46,8 +52,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.controller.attachCamera(
+      owner: _cameraBindingOwner,
       capture: _capturePhotoFromController,
       resumePreview: _resumePreviewFromController,
+    );
+    widget.controller.attachSourceFrameAccess(
+      owner: _cameraBindingOwner,
+      getCurrentFrame: _getCurrentFrameFromController,
+      getCapturedFrame: _getCapturedFrameFromController,
     );
     _initializeCamera();
   }
@@ -56,20 +68,30 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   void didUpdateWidget(covariant BBoxCameraSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.detachCamera();
+      oldWidget.controller.detachCamera(_cameraBindingOwner);
+      oldWidget.controller.detachSourceFrameAccess(_cameraBindingOwner);
       widget.controller.attachCamera(
+        owner: _cameraBindingOwner,
         capture: _capturePhotoFromController,
         resumePreview: _resumePreviewFromController,
       );
+      widget.controller.attachSourceFrameAccess(
+        owner: _cameraBindingOwner,
+        getCurrentFrame: _getCurrentFrameFromController,
+        getCapturedFrame: _getCapturedFrameFromController,
+      );
     }
     if (oldWidget.config == widget.config) return;
+
+    if (oldWidget.config.mode != widget.config.mode) {
+      _reinitializeCamera();
+      return;
+    }
 
     if (_requiresCameraReinitialize(oldWidget.config, widget.config)) {
       _reinitializeCamera();
       return;
     }
-
-    _handleModeChange(oldWidget.config.mode, widget.config.mode);
   }
 
   @override
@@ -95,6 +117,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         _initializing = true;
       });
     }
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: false,
+      isCaptureFrozen: false,
+      canCapture: false,
+      canResumePreview: false,
+    );
     widget.onEditableFrameChanged(false);
     await _initializeCamera();
   }
@@ -135,6 +164,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         _initializing = false;
       });
 
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: true,
+        isCaptureFrozen: false,
+        canCapture: _isCaptureMode,
+        canResumePreview: false,
+      );
       final previewSize = controller.value.previewSize;
       if (previewSize != null) {
         widget.onFrameReady(_displaySizeFor(previewSize));
@@ -151,6 +187,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         _error = error;
         _initializing = false;
       });
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: false,
+        isCaptureFrozen: false,
+        canCapture: false,
+        canResumePreview: false,
+      );
       widget.onEditableFrameChanged(false);
       widget.onError(error);
     }
@@ -169,11 +212,34 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         _capturedBytes = bytes;
         _capturedSize = size;
       });
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: false,
+        isCaptureFrozen: true,
+        canCapture: false,
+        canResumePreview: true,
+      );
+      final frame = BBoxFrameData(
+        bytes: bytes,
+        sourceResolution: _displaySizeFor(size),
+        timestamp: DateTime.now(),
+        mimeType: 'image/jpeg',
+        sourceType: BBoxFrameSourceType.cameraCapture,
+      );
+      widget.controller.updateCapturedSourceFrame(frame);
+      widget.onCapturedFrame?.call(frame);
       widget.onFrameReady(_displaySizeFor(size));
       widget.onEditableFrameChanged(true);
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error);
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: false,
+        isCaptureFrozen: false,
+        canCapture: false,
+        canResumePreview: false,
+      );
       widget.onEditableFrameChanged(false);
       widget.onError(error);
     }
@@ -193,6 +259,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     });
     widget.onEditableFrameChanged(false);
     widget.onResumePreview();
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: true,
+      isCaptureFrozen: false,
+      canCapture: _isCaptureMode,
+      canResumePreview: false,
+    );
     final previewSize = controller?.value.previewSize;
     final resolution = previewSize == null
         ? null
@@ -216,6 +289,38 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     }
   }
 
+  Future<BBoxFrameData?> _getCurrentFrameFromController() async {
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) return null;
+    try {
+      final file = await controller.takePicture();
+      final bytes = await file.readAsBytes();
+      final size = await _decodeImageSize(bytes);
+      return BBoxFrameData(
+        bytes: bytes,
+        sourceResolution: _displaySizeFor(size),
+        timestamp: DateTime.now(),
+        mimeType: 'image/jpeg',
+        sourceType: BBoxFrameSourceType.cameraLive,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<BBoxFrameData?> _getCapturedFrameFromController() async {
+    final bytes = _capturedBytes;
+    final size = _capturedSize;
+    if (bytes == null || size == null) return null;
+    return BBoxFrameData(
+      bytes: bytes,
+      sourceResolution: _displaySizeFor(size),
+      timestamp: DateTime.now(),
+      mimeType: 'image/jpeg',
+      sourceType: BBoxFrameSourceType.cameraCapture,
+    );
+  }
+
   bool _requiresCameraReinitialize(
     BBoxCameraConfig previous,
     BBoxCameraConfig next,
@@ -227,31 +332,38 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   void _handleModeChange(BBoxCameraMode previousMode, BBoxCameraMode nextMode) {
     if (previousMode == nextMode) return;
-
-    if (nextMode == BBoxCameraMode.livePreview) {
-      setState(() {
-        _capturedBytes = null;
-        _capturedSize = null;
-        _error = null;
-      });
-      final previewSize = _cameraController?.value.previewSize;
-      _notifyModeTransition(
-        editable: true,
-        resolution: previewSize == null ? null : _displaySizeFor(previewSize),
-      );
-      return;
-    }
+    final controller = _cameraController;
+    final hadCapturedFrame = _capturedBytes != null;
 
     setState(() {
       _capturedBytes = null;
       _capturedSize = null;
       _error = null;
     });
-    final previewSize = _cameraController?.value.previewSize;
+
+    if (hadCapturedFrame) {
+      widget.onResumePreview();
+    }
+
+    final previewSize = controller?.value.previewSize;
+    final editable = nextMode == BBoxCameraMode.livePreview;
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: true,
+      isCaptureFrozen: false,
+      canCapture: !editable,
+      canResumePreview: false,
+    );
     _notifyModeTransition(
-      editable: false,
+      editable: editable,
       resolution: previewSize == null ? null : _displaySizeFor(previewSize),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (controller != null && controller.value.isInitialized) {
+        unawaited(_resumeNativePreview(controller));
+      }
+    });
   }
 
   void _notifyModeTransition({required bool editable, Size? resolution}) {
@@ -355,7 +467,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    widget.controller.detachCamera();
+    widget.controller.detachCamera(_cameraBindingOwner);
+    widget.controller.detachSourceFrameAccess(_cameraBindingOwner);
     _disposeController();
     super.dispose();
   }

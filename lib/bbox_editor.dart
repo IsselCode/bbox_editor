@@ -1,4 +1,7 @@
+import 'dart:async';
+export 'src/bbox_editor_controls_config.dart';
 import 'package:bbox_editor/mjpeg_stream/mjpeg_stream_screen.dart';
+import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'exports.dart';
@@ -10,16 +13,19 @@ class BBoxEditor extends StatefulWidget {
   final BBoxCameraConfig? camera;
   final BBoxEditorController? controller;
   final Future<List<BBoxEntity>> Function(FitCoverMapper mapper)?
-  onStreamReadyFutureBoundings;
+  onSourceReadyFutureBoxes;
   final void Function(BBoxEvent event)? onCommitBox;
+  final void Function(BBoxFrameData frame)? onLiveFrame;
+  final void Function(BBoxFrameData frame)? onCapturedFrame;
 
-  final VoidCallback? onStreamError;
-  final VoidCallback? onStreamReady;
+  final VoidCallback? onSourceError;
+  final VoidCallback? onSourceReady;
   final VoidCallback? onRetry;
   final ImageProvider? image;
 
   final ToolPolicy policy;
   final bool logs;
+  final BBoxEditorControlsConfig controlsConfig;
 
   BBoxEditor({
     super.key,
@@ -30,11 +36,14 @@ class BBoxEditor extends StatefulWidget {
     this.policy = ToolPolicy.platformDefault,
     this.controller,
     this.onRetry,
-    this.onStreamError,
-    this.onStreamReady,
-    this.onStreamReadyFutureBoundings,
+    this.onSourceError,
+    this.onSourceReady,
+    this.onSourceReadyFutureBoxes,
     this.onCommitBox,
+    this.onLiveFrame,
+    this.onCapturedFrame,
     this.logs = true,
+    this.controlsConfig = const BBoxEditorControlsConfig(),
   }) {
     final configuredSources = [
       image,
@@ -56,12 +65,14 @@ class BBoxEditor extends StatefulWidget {
 }
 
 class _BBoxEditorState extends State<BBoxEditor> {
+  final Object _sourceFrameOwner = Object();
   final _tc = TransformationController();
   final Set<int> _touchPointers = <int>{};
-  bool cameraStreamError = false;
+  bool _sourceError = false;
   bool _cameraFrameReady = false;
   bool _loadingInitial = false;
   Size? _resolvedSourceResolution;
+  BBoxFrameData? _imageFrameData;
   double _currentZoomScale = 1;
   BBoxEditorController get _ctrl =>
       widget.controller ?? (throw ArgumentError('controller es requerido'));
@@ -78,7 +89,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
   bool get _usesCamera => widget.camera != null;
   bool get _usesStream => widget.stream != null;
   bool get _usesImage => widget.image != null;
-  bool get _sourceHasVisualError => cameraStreamError;
+  bool get _sourceHasVisualError => _sourceError;
   bool get _sourceAllowsBBoxEdit {
     if (!_usesCamera) return true;
     if (_sourceHasVisualError) return false;
@@ -93,16 +104,64 @@ class _BBoxEditorState extends State<BBoxEditor> {
       _resolvedSourceResolution = widget.sourceResolution;
       _ctrl.sourceResolution = widget.sourceResolution!;
     }
+    _attachSourceFrameAccess();
     WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
-      if (_usesImage) await loadBoxes();
+      if (_usesImage) {
+        if (widget.onLiveFrame != null) {
+          await _prepareImageSourceFrame();
+        }
+        await _loadInitialBoxes();
+      }
     });
   }
 
-  loadBoxes() async {
-    if (widget.onStreamReadyFutureBoundings != null) {
+  @override
+  void didUpdateWidget(covariant BBoxEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final sourceChanged =
+        oldWidget.image != widget.image ||
+        oldWidget.stream != widget.stream ||
+        oldWidget.camera != widget.camera;
+    if (!sourceChanged) return;
+
+    _sourceError = false;
+    if (_usesCamera) {
+      _cameraFrameReady = false;
+    }
+    if (widget.sourceResolution != null) {
+      _resolvedSourceResolution = widget.sourceResolution;
+      _ctrl.sourceResolution = widget.sourceResolution!;
+    }
+    _attachSourceFrameAccess();
+    if (_usesImage) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (widget.onLiveFrame != null) {
+          await _prepareImageSourceFrame();
+        }
+      });
+    } else {
+      _imageFrameData = null;
+      _ctrl.updateCurrentSourceFrame(null);
+      _ctrl.updateCapturedSourceFrame(null);
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _attachSourceFrameAccess() {
+    _ctrl.attachSourceFrameAccess(
+      owner: _sourceFrameOwner,
+      getCurrentFrame: _getCurrentSourceFrame,
+      getCapturedFrame: _getCapturedSourceFrame,
+    );
+  }
+
+  Future<void> _loadInitialBoxes() async {
+    if (widget.onSourceReadyFutureBoxes != null) {
       setState(() => _loadingInitial = true);
       try {
-        final list = await widget.onStreamReadyFutureBoundings!(_ctrl.mapper);
+        final list = await widget.onSourceReadyFutureBoxes!(_ctrl.mapper);
         _ctrl.setInitialBoxes(list);
       } finally {
         if (mounted) setState(() => _loadingInitial = false);
@@ -110,19 +169,123 @@ class _BBoxEditorState extends State<BBoxEditor> {
     }
   }
 
+  Future<void> _prepareImageSourceFrame() async {
+    if (!_usesImage) return;
+    final frame = await _frameDataFromImageProvider(
+      widget.image!,
+      _sourceResolution,
+      BBoxFrameSourceType.image,
+    );
+    if (!mounted || frame == null) return;
+    _imageFrameData = frame;
+    _ctrl.updateCurrentSourceFrame(frame);
+    widget.onLiveFrame?.call(frame);
+  }
+
   Future<void> _handleSourceReady(Size resolution) async {
     _resolvedSourceResolution = resolution;
     _ctrl.sourceResolution = resolution;
-    cameraStreamError = false;
+    _sourceError = false;
     if (mounted) setState(() {});
-    widget.onStreamReady?.call();
-    await loadBoxes();
+    widget.onSourceReady?.call();
+    await _loadInitialBoxes();
   }
 
   void _handleSourceError() {
-    cameraStreamError = true;
+    _sourceError = true;
     if (mounted) setState(() {});
-    widget.onStreamError?.call();
+    widget.onSourceError?.call();
+  }
+
+  Future<BBoxFrameData?> _getCurrentSourceFrame() async {
+    if (_usesImage) {
+      if (_imageFrameData != null) return _imageFrameData;
+      await _prepareImageSourceFrame();
+      return _imageFrameData;
+    }
+    return _ctrl.currentSourceFrame.value;
+  }
+
+  Future<BBoxFrameData?> _getCapturedSourceFrame() async {
+    return _ctrl.capturedSourceFrame.value;
+  }
+
+  Future<BBoxFrameData?> _frameDataFromImageProvider(
+    ImageProvider provider,
+    Size sourceResolution,
+    BBoxFrameSourceType sourceType,
+  ) async {
+    if (provider is MemoryImage) {
+      return BBoxFrameData(
+        bytes: provider.bytes,
+        sourceResolution: sourceResolution,
+        timestamp: DateTime.now(),
+        mimeType: 'image/png',
+        sourceType: sourceType,
+      );
+    }
+
+    final stream = provider.resolve(ImageConfiguration.empty);
+    final completer = Completer<ImageInfo>();
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, _) => completer.complete(info),
+      onError: (Object error, StackTrace? stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      },
+    );
+    stream.addListener(listener);
+    try {
+      final info = await completer.future;
+      final byteData = await info.image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      if (byteData == null) {
+        return _blankFrameData(sourceResolution, sourceType);
+      }
+      return BBoxFrameData(
+        bytes: byteData.buffer.asUint8List(),
+        sourceResolution: sourceResolution,
+        timestamp: DateTime.now(),
+        mimeType: 'image/png',
+        sourceType: sourceType,
+      );
+    } catch (_) {
+      return _blankFrameData(sourceResolution, sourceType);
+    } finally {
+      stream.removeListener(listener);
+    }
+  }
+
+  Future<BBoxFrameData> _blankFrameData(
+    Size sourceResolution,
+    BBoxFrameSourceType sourceType,
+  ) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final double width = sourceResolution.width <= 0
+        ? 1
+        : sourceResolution.width;
+    final double height = sourceResolution.height <= 0
+        ? 1
+        : sourceResolution.height;
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, width, height),
+      Paint()..color = Colors.black,
+    );
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width.ceil(), height.ceil());
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    return BBoxFrameData(
+      bytes: byteData!.buffer.asUint8List(),
+      sourceResolution: sourceResolution,
+      timestamp: DateTime.now(),
+      mimeType: 'image/png',
+      sourceType: sourceType,
+    );
   }
 
   bool get _isAutoTool => effectiveTool == BBoxTool.auto;
@@ -183,6 +346,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
 
   @override
   void dispose() {
+    _ctrl.detachSourceFrameAccess(_sourceFrameOwner);
     _tc.removeListener(_handleTransformChanged);
     _tc.dispose();
     super.dispose();
@@ -233,6 +397,17 @@ class _BBoxEditorState extends State<BBoxEditor> {
                           onStartCamera: () async {
                             await _handleSourceReady(_sourceResolution);
                           },
+                          onFrame: (bytes) {
+                            final frame = BBoxFrameData(
+                              bytes: bytes,
+                              sourceResolution: _sourceResolution,
+                              timestamp: DateTime.now(),
+                              mimeType: 'image/jpeg',
+                              sourceType: BBoxFrameSourceType.stream,
+                            );
+                            _ctrl.updateCurrentSourceFrame(frame);
+                            widget.onLiveFrame?.call(frame);
+                          },
                         ),
 
                       // Aceptar cualquier tipo de imagen
@@ -241,6 +416,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
 
                       if (_usesCamera)
                         BBoxCameraSurface(
+                          key: ValueKey(widget.camera),
                           controller: _ctrl,
                           config: widget.camera!,
                           onFrameReady: (resolution) async {
@@ -252,7 +428,16 @@ class _BBoxEditorState extends State<BBoxEditor> {
                           },
                           onError: (_) => _handleSourceError(),
                           onResumePreview: () {
+                            _ctrl.updateCapturedSourceFrame(null);
                             _ctrl.clearAll();
+                          },
+                          onLiveFrame: (frame) {
+                            _ctrl.updateCurrentSourceFrame(frame);
+                            widget.onLiveFrame?.call(frame);
+                          },
+                          onCapturedFrame: (frame) {
+                            _ctrl.updateCapturedSourceFrame(frame);
+                            widget.onCapturedFrame?.call(frame);
                           },
                         ),
 
@@ -272,6 +457,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
                                 viewSize: viewSize,
                                 sourceResolution: _sourceResolution,
                                 zoomScale: _currentZoomScale,
+                                controlsConfig: widget.controlsConfig,
                                 isInteractive:
                                     allowBBoxEdit && _sourceAllowsBBoxEdit,
                                 // Usa el mismo controller que ya tienes para editar en memoria

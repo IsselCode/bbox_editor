@@ -11,6 +11,7 @@ import 'package:web/web.dart' as web;
 import 'bbox_camera_config.dart';
 import 'bbox_editor_controller.dart';
 import 'bbox_editor_enums.dart';
+import 'bbox_frame_data.dart';
 
 class BBoxCameraSurface extends StatefulWidget {
   const BBoxCameraSurface({
@@ -21,6 +22,8 @@ class BBoxCameraSurface extends StatefulWidget {
     required this.onEditableFrameChanged,
     required this.onError,
     required this.onResumePreview,
+    this.onLiveFrame,
+    this.onCapturedFrame,
   });
 
   final BBoxEditorController controller;
@@ -29,12 +32,15 @@ class BBoxCameraSurface extends StatefulWidget {
   final ValueChanged<bool> onEditableFrameChanged;
   final ValueChanged<Object> onError;
   final VoidCallback onResumePreview;
+  final ValueChanged<BBoxFrameData>? onLiveFrame;
+  final ValueChanged<BBoxFrameData>? onCapturedFrame;
 
   @override
   State<BBoxCameraSurface> createState() => _BBoxCameraSurfaceState();
 }
 
 class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
+  final Object _cameraBindingOwner = Object();
   late final String _viewType;
   late final web.HTMLDivElement _hostElement;
   web.HTMLVideoElement? _videoElement;
@@ -44,6 +50,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
   Object? _error;
   bool _initializing = true;
   bool _applyMirrorCorrection = false;
+  int? _liveFrameCallbackId;
 
   bool get _isCaptureMode => widget.config.mode == BBoxCameraMode.captureStill;
 
@@ -51,8 +58,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
   void initState() {
     super.initState();
     widget.controller.attachCamera(
+      owner: _cameraBindingOwner,
       capture: _capturePhotoFromController,
       resumePreview: _resumePreviewFromController,
+    );
+    widget.controller.attachSourceFrameAccess(
+      owner: _cameraBindingOwner,
+      getCurrentFrame: _getCurrentFrameFromController,
+      getCapturedFrame: _getCapturedFrameFromController,
     );
     _viewType =
         'bbox-editor-camera-${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(this)}';
@@ -75,20 +88,30 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
   void didUpdateWidget(covariant BBoxCameraSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.detachCamera();
+      oldWidget.controller.detachCamera(_cameraBindingOwner);
+      oldWidget.controller.detachSourceFrameAccess(_cameraBindingOwner);
       widget.controller.attachCamera(
+        owner: _cameraBindingOwner,
         capture: _capturePhotoFromController,
         resumePreview: _resumePreviewFromController,
       );
+      widget.controller.attachSourceFrameAccess(
+        owner: _cameraBindingOwner,
+        getCurrentFrame: _getCurrentFrameFromController,
+        getCapturedFrame: _getCapturedFrameFromController,
+      );
     }
     if (oldWidget.config == widget.config) return;
+
+    if (oldWidget.config.mode != widget.config.mode) {
+      _reinitializeCamera();
+      return;
+    }
 
     if (_requiresCameraReinitialize(oldWidget.config, widget.config)) {
       _reinitializeCamera();
       return;
     }
-
-    _handleModeChange(oldWidget.config.mode, widget.config.mode);
   }
 
   Future<void> _reinitializeCamera() async {
@@ -101,6 +124,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
         _initializing = true;
       });
     }
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: false,
+      isCaptureFrozen: false,
+      canCapture: false,
+      canResumePreview: false,
+    );
     widget.onEditableFrameChanged(false);
     await _initializeCamera();
   }
@@ -154,6 +184,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
         _initializing = false;
       });
 
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: true,
+        isCaptureFrozen: false,
+        canCapture: _isCaptureMode,
+        canResumePreview: false,
+      );
+      _startLiveFrameLoopIfNeeded();
       widget.onFrameReady(sourceSize);
       widget.onEditableFrameChanged(!_isCaptureMode);
     } catch (error) {
@@ -162,6 +200,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
         _error = error;
         _initializing = false;
       });
+      widget.controller.updateCameraState(
+        isAttached: true,
+        isPreviewActive: false,
+        isCaptureFrozen: false,
+        canCapture: false,
+        canResumePreview: false,
+      );
       widget.onEditableFrameChanged(false);
       widget.onError(error);
     }
@@ -203,6 +248,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
 
   void _handleModeChange(BBoxCameraMode previousMode, BBoxCameraMode nextMode) {
     if (previousMode == nextMode) return;
+    final video = _videoElement;
+    final hadCapturedFrame = _capturedBytes != null;
 
     setState(() {
       _capturedBytes = null;
@@ -210,13 +257,28 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
       _error = null;
     });
 
-    final video = _videoElement;
+    if (hadCapturedFrame) {
+      widget.onResumePreview();
+    }
+
+    final editable = nextMode == BBoxCameraMode.livePreview;
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: true,
+      isCaptureFrozen: false,
+      canCapture: !editable,
+      canResumePreview: false,
+    );
     _notifyModeTransition(
-      editable: nextMode == BBoxCameraMode.livePreview,
+      editable: editable,
       resolution: video != null && video.videoWidth > 0 && video.videoHeight > 0
           ? Size(video.videoWidth.toDouble(), video.videoHeight.toDouble())
           : null,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || video == null) return;
+      unawaited(_resumeWebPreview(video));
+    });
   }
 
   void _notifyModeTransition({required bool editable, Size? resolution}) {
@@ -344,6 +406,22 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
       _capturedBytes = bytes;
       _capturedSize = size;
     });
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: false,
+      isCaptureFrozen: true,
+      canCapture: false,
+      canResumePreview: true,
+    );
+    final frame = BBoxFrameData(
+      bytes: bytes,
+      sourceResolution: size,
+      timestamp: DateTime.now(),
+      mimeType: 'image/jpeg',
+      sourceType: BBoxFrameSourceType.cameraCapture,
+    );
+    widget.controller.updateCapturedSourceFrame(frame);
+    widget.onCapturedFrame?.call(frame);
     widget.onFrameReady(size);
     widget.onEditableFrameChanged(true);
   }
@@ -367,11 +445,108 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
     });
     widget.onEditableFrameChanged(false);
     widget.onResumePreview();
+    widget.controller.updateCapturedSourceFrame(null);
+    widget.controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: true,
+      isCaptureFrozen: false,
+      canCapture: _isCaptureMode,
+      canResumePreview: false,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(_resumeWebPreview(video));
       widget.onFrameReady(resolution);
     });
+  }
+
+  Future<BBoxFrameData?> _getCurrentFrameFromController() async {
+    final video = _videoElement;
+    if (video == null) return null;
+    return _captureVideoFrame(
+      video,
+      sourceType: BBoxFrameSourceType.cameraLive,
+    );
+  }
+
+  Future<BBoxFrameData?> _getCapturedFrameFromController() async {
+    final bytes = _capturedBytes;
+    final size = _capturedSize;
+    if (bytes == null || size == null) return null;
+    return BBoxFrameData(
+      bytes: bytes,
+      sourceResolution: size,
+      timestamp: DateTime.now(),
+      mimeType: 'image/jpeg',
+      sourceType: BBoxFrameSourceType.cameraCapture,
+    );
+  }
+
+  Future<BBoxFrameData?> _captureVideoFrame(
+    web.HTMLVideoElement video, {
+    required BBoxFrameSourceType sourceType,
+  }) async {
+    final width = video.videoWidth;
+    final height = video.videoHeight;
+    if (width <= 0 || height <= 0) return null;
+
+    final canvas = web.HTMLCanvasElement()
+      ..width = width
+      ..height = height;
+    final context = canvas.context2D;
+    if (_applyMirrorCorrection) {
+      context
+        ..translate(width.toDouble(), 0)
+        ..scale(-1, 1);
+    }
+    context.drawImageScaled(video, 0, 0, width.toDouble(), height.toDouble());
+    final dataUrl = canvas.toDataURL('image/jpeg');
+    final base64Part = dataUrl.contains(',')
+        ? dataUrl.split(',').last
+        : dataUrl;
+    final bytes = base64Decode(base64Part);
+    return BBoxFrameData(
+      bytes: bytes,
+      sourceResolution: Size(width.toDouble(), height.toDouble()),
+      timestamp: DateTime.now(),
+      mimeType: 'image/jpeg',
+      sourceType: sourceType,
+    );
+  }
+
+  void _startLiveFrameLoopIfNeeded() {
+    if (widget.onLiveFrame == null) return;
+    if (widget.config.mode != BBoxCameraMode.livePreview) return;
+    if (_liveFrameCallbackId != null) return;
+    _scheduleNextLiveFrame();
+  }
+
+  void _scheduleNextLiveFrame() {
+    _liveFrameCallbackId = web.window.requestAnimationFrame(
+      ((num _) {
+        _liveFrameCallbackId = null;
+        unawaited(_emitLiveFrameAndReschedule());
+      }).toJS,
+    );
+  }
+
+  Future<void> _emitLiveFrameAndReschedule() async {
+    if (!mounted || widget.onLiveFrame == null) return;
+    if (widget.config.mode != BBoxCameraMode.livePreview) return;
+    final video = _videoElement;
+    if (video != null) {
+      final frame = await _captureVideoFrame(
+        video,
+        sourceType: BBoxFrameSourceType.cameraLive,
+      );
+      if (frame != null && mounted) {
+        widget.controller.updateCurrentSourceFrame(frame);
+        widget.onLiveFrame?.call(frame);
+      }
+    }
+    if (mounted) {
+      _scheduleNextLiveFrame();
+    }
   }
 
   Future<void> _resumeWebPreview(web.HTMLVideoElement video) async {
@@ -383,6 +558,10 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
   }
 
   Future<void> _disposeCamera() async {
+    if (_liveFrameCallbackId != null) {
+      web.window.cancelAnimationFrame(_liveFrameCallbackId!);
+      _liveFrameCallbackId = null;
+    }
     _stopStream(_stream);
     _stream = null;
     _videoElement?.srcObject = null;
@@ -419,7 +598,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
 
   @override
   void dispose() {
-    widget.controller.detachCamera();
+    widget.controller.detachCamera(_cameraBindingOwner);
+    widget.controller.detachSourceFrameAccess(_cameraBindingOwner);
     _disposeCamera();
     super.dispose();
   }

@@ -1,21 +1,31 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+
 import '../exports.dart';
 
 class BBoxEditorController extends ChangeNotifier {
-  // --- Tamaños y mapper
+  BBoxEditorController() {
+    boxes.addListener(_syncCanCreateBoxes);
+    creationEnabled.addListener(_syncCanCreateBoxes);
+    maxBoxCount.addListener(_syncCanCreateBoxes);
+    _syncCanCreateBoxes();
+  }
+
   late Size _viewSize;
   Size get viewSize => _viewSize;
   set viewSize(Size v) => _viewSize = v;
   late Size sourceResolution;
 
-  // Herramienta seleccionada
   final ValueNotifier<BBoxTool> bBoxTool = ValueNotifier(BBoxTool.auto);
   void setTool(BBoxTool tool) => bBoxTool.value = tool;
 
-  // Control de creación de boxes
   final ValueNotifier<bool> creationEnabled = ValueNotifier(true);
   final ValueNotifier<int?> maxBoxCount = ValueNotifier(null);
+  final ValueNotifier<bool> canCreateBoxesListenable = ValueNotifier(true);
 
   void setCreationEnabled(bool enabled) => creationEnabled.value = enabled;
 
@@ -30,12 +40,7 @@ class BBoxEditorController extends ChangeNotifier {
     maxBoxCount.value = max;
   }
 
-  bool get canCreateBoxes {
-    if (!creationEnabled.value) return false;
-    final max = maxBoxCount.value;
-    if (max == null) return true;
-    return boxes.value.length < max;
-  }
+  bool get canCreateBoxes => canCreateBoxesListenable.value;
 
   FitCoverMapper get mapper {
     assert(
@@ -49,24 +54,37 @@ class BBoxEditorController extends ChangeNotifier {
     return FitCoverMapper(_viewSize, sourceResolution);
   }
 
-  // --- Estado reactivo de boxes
   final ValueNotifier<List<BBoxEntity>> boxes = ValueNotifier(const []);
+  final ValueNotifier<BBoxEntity?> selectedBoxListenable = ValueNotifier(null);
+  BBoxEntity? get selectedBox => selectedBoxListenable.value;
 
-  // --- Eventos (opcional si te sirven)
+  final ValueNotifier<bool> cameraAttached = ValueNotifier(false);
+  final ValueNotifier<bool> cameraPreviewActive = ValueNotifier(false);
+  final ValueNotifier<bool> cameraCaptureFrozen = ValueNotifier(false);
+  final ValueNotifier<bool> cameraCanCapture = ValueNotifier(false);
+  final ValueNotifier<bool> cameraCanResumePreview = ValueNotifier(false);
+
+  final ValueNotifier<BBoxFrameData?> currentSourceFrame = ValueNotifier(null);
+  final ValueNotifier<BBoxFrameData?> capturedSourceFrame = ValueNotifier(null);
+
   final _events = StreamController<BBoxEvent>.broadcast();
   Stream<BBoxEvent> get events => _events.stream;
 
-  // --- Hooks que antes vivían en MultiBBoxOverlayController
   VoidCallback? _ovClearAll;
   void Function(int id, CommitOrigin commitOrigin)? _ovRemove;
   void Function(BBoxEntity box, CommitOrigin commitOrigin)? _ovAdd;
   void Function(List<BBoxEntity> boxes)? _ovSetAll;
   void Function(int id, BBoxEntity box, CommitOrigin commitOrigin)? _ovUpdate;
   void Function(int? id, CommitOrigin commitOrigin)? _ovSelected;
+
+  Object? _cameraOwner;
   VoidCallback? _cameraCapture;
   VoidCallback? _cameraResumePreview;
 
-  /// Llamado por el overlay en su initState
+  Object? _sourceFrameOwner;
+  Future<BBoxFrameData?> Function()? _getCurrentSourceFrame;
+  Future<BBoxFrameData?> Function()? _getCapturedSourceFrame;
+
   void attachOverlay({
     required VoidCallback clearAll,
     required void Function(int id, CommitOrigin commitOrigin) remove,
@@ -84,7 +102,6 @@ class BBoxEditorController extends ChangeNotifier {
     _ovSelected = selected;
   }
 
-  /// Llamado por el overlay en su dispose
   void detachOverlay() {
     _ovClearAll = null;
     _ovRemove = null;
@@ -95,40 +112,151 @@ class BBoxEditorController extends ChangeNotifier {
   }
 
   void attachCamera({
+    required Object owner,
     required VoidCallback capture,
     required VoidCallback resumePreview,
   }) {
+    _cameraOwner = owner;
     _cameraCapture = capture;
     _cameraResumePreview = resumePreview;
+    updateCameraState(
+      isAttached: true,
+      isPreviewActive: false,
+      isCaptureFrozen: false,
+      canCapture: false,
+      canResumePreview: false,
+    );
   }
 
-  void detachCamera() {
+  void detachCamera(Object owner) {
+    if (!identical(_cameraOwner, owner)) return;
+    _cameraOwner = null;
     _cameraCapture = null;
     _cameraResumePreview = null;
+    updateCameraState(
+      isAttached: false,
+      isPreviewActive: false,
+      isCaptureFrozen: false,
+      canCapture: false,
+      canResumePreview: false,
+    );
   }
 
-  // --- API externa para el padre/negocio y también usada por el overlay
+  void attachSourceFrameAccess({
+    required Object owner,
+    required Future<BBoxFrameData?> Function() getCurrentFrame,
+    required Future<BBoxFrameData?> Function() getCapturedFrame,
+  }) {
+    _sourceFrameOwner = owner;
+    _getCurrentSourceFrame = getCurrentFrame;
+    _getCapturedSourceFrame = getCapturedFrame;
+  }
+
+  void detachSourceFrameAccess(Object owner) {
+    if (!identical(_sourceFrameOwner, owner)) return;
+    _sourceFrameOwner = null;
+    _getCurrentSourceFrame = null;
+    _getCapturedSourceFrame = null;
+  }
+
+  void updateCameraState({
+    required bool isAttached,
+    required bool isPreviewActive,
+    required bool isCaptureFrozen,
+    required bool canCapture,
+    required bool canResumePreview,
+  }) {
+    if (cameraAttached.value != isAttached) {
+      cameraAttached.value = isAttached;
+    }
+    if (cameraPreviewActive.value != isPreviewActive) {
+      cameraPreviewActive.value = isPreviewActive;
+    }
+    if (cameraCaptureFrozen.value != isCaptureFrozen) {
+      cameraCaptureFrozen.value = isCaptureFrozen;
+    }
+    if (cameraCanCapture.value != canCapture) {
+      cameraCanCapture.value = canCapture;
+    }
+    if (cameraCanResumePreview.value != canResumePreview) {
+      cameraCanResumePreview.value = canResumePreview;
+    }
+  }
+
+  void updateCurrentSourceFrame(BBoxFrameData? frame) {
+    currentSourceFrame.value = frame;
+  }
+
+  void updateCapturedSourceFrame(BBoxFrameData? frame) {
+    capturedSourceFrame.value = frame;
+  }
 
   void setInitialBoxes(List<BBoxEntity> list) {
+    final selectedId = selectedBox?.id;
     boxes.value = List.unmodifiable(list);
-    _ovSetAll?.call(
-      list,
-    ); // notifica al overlay para sincronizar su buffer interno si tiene
-    // (No emito evento aquí para evitar ruido si no lo necesitas)
+    _syncSelectedBoxById(selectedId);
+    _ovSetAll?.call(list);
   }
 
   void clearAll() {
     boxes.value = const [];
+    _setSelectedBox(null);
     _ovClearAll?.call();
     _events.add(const BoxesCleared(origin: CommitOrigin.controller));
   }
 
   void captureCameraImage() {
+    if (!cameraCanCapture.value) return;
     _cameraCapture?.call();
   }
 
   void resumeCameraPreview() {
+    if (!cameraCanResumePreview.value) return;
     _cameraResumePreview?.call();
+  }
+
+  Future<BBoxFrameData?> getCurrentSourceFrame() async {
+    final fromProvider = await _getCurrentSourceFrame?.call();
+    if (fromProvider != null) {
+      currentSourceFrame.value = fromProvider;
+      return fromProvider;
+    }
+    return currentSourceFrame.value;
+  }
+
+  Future<BBoxFrameData?> getCapturedSourceFrame() async {
+    final fromProvider = await _getCapturedSourceFrame?.call();
+    if (fromProvider != null) {
+      capturedSourceFrame.value = fromProvider;
+      return fromProvider;
+    }
+    return capturedSourceFrame.value;
+  }
+
+  Future<BBoxCropData?> getBoxCrop(BBoxEntity box) async {
+    final frame = await _resolveCropFrame();
+    if (frame == null) return null;
+    return _cropBoxFromFrame(box, frame);
+  }
+
+  Future<BBoxCropData?> getBoxCropById(int id) async {
+    final box = boxes.value.cast<BBoxEntity?>().firstWhere(
+      (element) => element?.id == id,
+      orElse: () => null,
+    );
+    if (box == null) return null;
+    return getBoxCrop(box);
+  }
+
+  Future<List<BBoxCropData>> getAllBoxCrops() async {
+    final frame = await _resolveCropFrame();
+    if (frame == null) return const [];
+    final crops = <BBoxCropData>[];
+    for (final box in boxes.value) {
+      final crop = await _cropBoxFromFrame(box, frame);
+      if (crop != null) crops.add(crop);
+    }
+    return crops;
   }
 
   Future<void> addBox(
@@ -137,20 +265,16 @@ class BBoxEditorController extends ChangeNotifier {
   }) async {
     if (!canCreateBoxes) return;
     boxes.value = [...boxes.value, b];
+    _setSelectedBox(b);
     _ovAdd?.call(b, commitOrigin);
     _events.add(BoxCreated(box: b, origin: commitOrigin));
   }
 
-  BBoxEntity? selectedBox;
   Future<void> setSelectedBox(
     int? id, {
     CommitOrigin commitOrigin = CommitOrigin.controller,
   }) async {
-    if (id != null) {
-      selectedBox = boxes.value.singleWhere((element) => element.id == id);
-    } else {
-      selectedBox = null;
-    }
+    _syncSelectedBoxById(id);
     _ovSelected?.call(id, commitOrigin);
   }
 
@@ -160,6 +284,7 @@ class BBoxEditorController extends ChangeNotifier {
   }) async {
     if (!canCreateBoxes) return;
     boxes.value = [...boxes.value, b];
+    _setSelectedBox(b);
     _ovAdd?.call(b, commitOrigin);
     _events.add(BoxCreated(box: b, origin: commitOrigin));
   }
@@ -169,6 +294,9 @@ class BBoxEditorController extends ChangeNotifier {
     CommitOrigin commitOrigin = CommitOrigin.controller,
   }) async {
     boxes.value = boxes.value.where((e) => e.id != id).toList(growable: false);
+    if (selectedBox?.id == id) {
+      _setSelectedBox(null);
+    }
     _ovRemove?.call(id, commitOrigin);
     _events.add(BoxDeleted(id: id, origin: commitOrigin));
   }
@@ -180,11 +308,144 @@ class BBoxEditorController extends ChangeNotifier {
   }) async {
     final i = boxes.value.indexWhere((e) => e.id == id);
     if (i < 0) return;
-    final updated = b;
-    final l = [...boxes.value]..[i] = updated;
+    final l = [...boxes.value]..[i] = b;
     boxes.value = l;
+    if (selectedBox?.id == id) {
+      _setSelectedBox(b);
+    }
     _ovUpdate?.call(b.id, b, commitOrigin);
     _events.add(BoxUpdated(box: b, origin: commitOrigin));
+  }
+
+  Future<BBoxFrameData?> _resolveCropFrame() async {
+    final captured = await getCapturedSourceFrame();
+    if (captured != null) return captured;
+    return getCurrentSourceFrame();
+  }
+
+  Future<BBoxCropData?> _cropBoxFromFrame(
+    BBoxEntity box,
+    BBoxFrameData frame,
+  ) async {
+    final codec = await ui.instantiateImageCodec(frame.bytes);
+    final frameInfo = await codec.getNextFrame();
+    final image = frameInfo.image;
+
+    try {
+      final scaleX = image.width / frame.sourceResolution.width;
+      final scaleY = image.height / frame.sourceResolution.height;
+      final pixelCorners = _pixelCornersForBox(box, frame, image);
+      final cropGeometry = _tightCropGeometry(pixelCorners);
+      if (cropGeometry == null) return null;
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.translate(cropGeometry.width / 2, cropGeometry.height / 2);
+      canvas.rotate(-cropGeometry.angle);
+      canvas.translate(-cropGeometry.center.dx, -cropGeometry.center.dy);
+      canvas.drawImage(image, Offset.zero, Paint());
+      final picture = recorder.endRecording();
+      final cropImage = await picture.toImage(
+        cropGeometry.width.ceil(),
+        cropGeometry.height.ceil(),
+      );
+      final byteData = await cropImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      cropImage.dispose();
+      if (byteData == null) return null;
+
+      final sourceRect = Rect.fromLTWH(
+        cropGeometry.sourceRect.left / scaleX,
+        cropGeometry.sourceRect.top / scaleY,
+        cropGeometry.sourceRect.width / scaleX,
+        cropGeometry.sourceRect.height / scaleY,
+      );
+      box.sourceCropRect = sourceRect;
+
+      return BBoxCropData(
+        box: box,
+        bytes: byteData.buffer.asUint8List(),
+        sourceResolution: frame.sourceResolution,
+        cropSize: Size(cropGeometry.width, cropGeometry.height),
+        sourceRect: sourceRect,
+        timestamp: DateTime.now(),
+        mimeType: 'image/png',
+        sourceType: frame.sourceType,
+      );
+    } finally {
+      image.dispose();
+    }
+  }
+
+  List<Offset> _pixelCornersForBox(
+    BBoxEntity box,
+    BBoxFrameData frame,
+    ui.Image image,
+  ) {
+    final scaleX = image.width / frame.sourceResolution.width;
+    final scaleY = image.height / frame.sourceResolution.height;
+    return box.corners
+        .map(mapper.pViewToFrame)
+        .map((point) => Offset(point.dx * scaleX, point.dy * scaleY))
+        .toList(growable: false);
+  }
+
+  _CropGeometry? _tightCropGeometry(List<Offset> corners) {
+    if (corners.length != 4) return null;
+    final topLeft = corners[0];
+    final topRight = corners[1];
+    final bottomRight = corners[2];
+    final bottomLeft = corners[3];
+    final width = (topRight - topLeft).distance;
+    final height = (bottomRight - topRight).distance;
+    if (width <= 0 || height <= 0) return null;
+
+    final angle = math.atan2(
+      topRight.dy - topLeft.dy,
+      topRight.dx - topLeft.dx,
+    );
+    final center = Offset(
+      (topLeft.dx + topRight.dx + bottomRight.dx + bottomLeft.dx) / 4,
+      (topLeft.dy + topRight.dy + bottomRight.dy + bottomLeft.dy) / 4,
+    );
+    return _CropGeometry(
+      center: center,
+      width: width,
+      height: height,
+      angle: angle,
+      sourceRect: _axisAlignedRectForCorners(corners),
+    );
+  }
+
+  Rect _axisAlignedRectForCorners(List<Offset> corners) {
+    final minX = corners.map((point) => point.dx).reduce(math.min);
+    final maxX = corners.map((point) => point.dx).reduce(math.max);
+    final minY = corners.map((point) => point.dy).reduce(math.min);
+    final maxY = corners.map((point) => point.dy).reduce(math.max);
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  void _syncCanCreateBoxes() {
+    final max = maxBoxCount.value;
+    final next =
+        creationEnabled.value && (max == null || boxes.value.length < max);
+    if (canCreateBoxesListenable.value != next) {
+      canCreateBoxesListenable.value = next;
+    }
+  }
+
+  void _syncSelectedBoxById(int? id) {
+    if (id == null) {
+      _setSelectedBox(null);
+      return;
+    }
+    final index = boxes.value.indexWhere((element) => element.id == id);
+    _setSelectedBox(index == -1 ? null : boxes.value[index]);
+  }
+
+  void _setSelectedBox(BBoxEntity? box) {
+    if (selectedBoxListenable.value == box) return;
+    selectedBoxListenable.value = box;
   }
 
   @override
@@ -192,8 +453,33 @@ class BBoxEditorController extends ChangeNotifier {
     bBoxTool.dispose();
     creationEnabled.dispose();
     maxBoxCount.dispose();
+    canCreateBoxesListenable.dispose();
     boxes.dispose();
+    selectedBoxListenable.dispose();
+    cameraAttached.dispose();
+    cameraPreviewActive.dispose();
+    cameraCaptureFrozen.dispose();
+    cameraCanCapture.dispose();
+    cameraCanResumePreview.dispose();
+    currentSourceFrame.dispose();
+    capturedSourceFrame.dispose();
     _events.close();
     super.dispose();
   }
+}
+
+class _CropGeometry {
+  const _CropGeometry({
+    required this.center,
+    required this.width,
+    required this.height,
+    required this.angle,
+    required this.sourceRect,
+  });
+
+  final Offset center;
+  final double width;
+  final double height;
+  final double angle;
+  final Rect sourceRect;
 }

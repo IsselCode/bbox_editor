@@ -31,6 +31,7 @@ class MJPEGStreamScreen extends StatefulWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onError;
   final VoidCallback? onStartCamera;
+  final ValueChanged<Uint8List>? onFrame;
 
   MJPEGStreamScreen({
     required this.streamUrl,
@@ -51,6 +52,7 @@ class MJPEGStreamScreen extends StatefulWidget {
     this.onRetry,
     this.onError,
     this.onStartCamera,
+    this.onFrame,
   });
 
   @override
@@ -186,6 +188,7 @@ class _MJPEGStreamScreenState extends State<MJPEGStreamScreen> {
           imageData[1] == 0xD8 &&
           imageData.last == 0xD9) {
         image.value = MemoryImage(Uint8List.fromList(imageData));
+        widget.onFrame?.call(Uint8List.fromList(imageData));
         if (!_didNotifyStart) {
           _didNotifyStart = true;
           widget.onStartCamera?.call();

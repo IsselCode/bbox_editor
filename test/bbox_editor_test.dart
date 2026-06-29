@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:bbox_editor/bbox_editor.dart';
 import 'package:bbox_editor/exports.dart';
@@ -16,8 +17,10 @@ void main() {
 
   Widget buildHarnessWithPolicy(
     BBoxEditorController controller,
-    ToolPolicy policy,
-  ) {
+    ToolPolicy policy, {
+    BBoxEditorControlsConfig controlsConfig =
+        const BBoxEditorControlsConfig(),
+  }) {
     return MaterialApp(
       home: Scaffold(
         body: Center(
@@ -29,6 +32,7 @@ void main() {
               controller: controller,
               logs: false,
               policy: policy,
+              controlsConfig: controlsConfig,
             ),
           ),
         ),
@@ -38,6 +42,18 @@ void main() {
 
   Widget buildHarness(BBoxEditorController controller) {
     return buildHarnessWithPolicy(controller, ToolPolicy.enforced);
+  }
+
+  Offset editorGlobalPoint(WidgetTester tester, Offset localPoint) {
+    return tester.getTopLeft(find.byType(BBoxEditor)) + localPoint;
+  }
+
+  Offset deleteControlCenter(BBoxEntity box) {
+    return box.handlePositions()[Handle.tr]!.translate(30, -30);
+  }
+
+  Offset rotateControlCenter(BBoxEntity box) {
+    return box.rotateHandle(36);
   }
 
   Future<void> drawTouchBox(
@@ -92,6 +108,283 @@ void main() {
     await drawTouchBox(tester);
 
     expect(controller.boxes.value, isEmpty);
+  });
+
+  test('frame relative centers are local to crop size', () {
+    final frame = BBoxFrameGeometry();
+    frame.syncFromAbsoluteCenter(
+      centerX: 640,
+      centerY: 360,
+      width: 200,
+      height: 100,
+      sourceResolution: const Size(1920, 1080),
+    );
+
+    expect(frame.absoluteX, 540);
+    expect(frame.absoluteY, 310);
+    expect(frame.absoluteCenterX, 640);
+    expect(frame.absoluteCenterY, 360);
+    expect(frame.relativeCenterX, 100);
+    expect(frame.relativeCenterY, 50);
+  });
+
+  test('fromServerJson maps backend frame coordinates into entity geometry', () {
+    final mapper = FitCoverMapper(
+      const Size(640, 360),
+      const Size(1280, 720),
+    );
+
+    final box = BBoxEntity.fromServerJson({
+      'id': 9,
+      'cx': 640,
+      'cy': 360,
+      'w': 200,
+      'h': 100,
+      'tag': 'person',
+      'angle_deg': 30,
+      'color_hex': '#22C55E',
+    }, mapper: mapper);
+
+    expect(box.id, 9);
+    expect(box.tag, 'person');
+    expect(box.center.dx, closeTo(320, 0.001));
+    expect(box.center.dy, closeTo(180, 0.001));
+    expect(box.w, closeTo(100, 0.001));
+    expect(box.h, closeTo(50, 0.001));
+    expect(box.angle, closeTo(math.pi / 6, 0.0001));
+    expect(box.centerF.dx, closeTo(640, 0.001));
+    expect(box.centerF.dy, closeTo(360, 0.001));
+  });
+
+  test('fromServerCornersJson reconstructs rotated rectangle from clean corners', () {
+    final mapper = FitCoverMapper(
+      const Size(640, 360),
+      const Size(1280, 720),
+    );
+    final frameBox = BBoxEntity(
+      id: 41,
+      center: const Offset(640, 360),
+      w: 240,
+      h: 120,
+      angle: math.pi / 6,
+    );
+    final corners = frameBox.corners;
+
+    final box = BBoxEntity.fromServerCornersJson({
+      'id': 41,
+      'tag': 'vehicle',
+      'color_bgr': [0, 0, 255],
+      'tl': {'x': corners[0].dx, 'y': corners[0].dy},
+      'tr': {'x': corners[1].dx, 'y': corners[1].dy},
+      'br': {'x': corners[2].dx, 'y': corners[2].dy},
+      'bl': {'x': corners[3].dx, 'y': corners[3].dy},
+    }, mapper: mapper);
+
+    expect(box.id, 41);
+    expect(box.tag, 'vehicle');
+    expect(box.center.dx, closeTo(320, 0.001));
+    expect(box.center.dy, closeTo(180, 0.001));
+    expect(box.w, closeTo(120, 0.001));
+    expect(box.h, closeTo(60, 0.001));
+    expect(box.angle, closeTo(math.pi / 6, 0.0001));
+    expect(box.centerF.dx, closeTo(640, 0.001));
+    expect(box.centerF.dy, closeTo(360, 0.001));
+    expect(box.wF, closeTo(240, 0.001));
+    expect(box.hF, closeTo(120, 0.001));
+    expect(box.angleDegScreen, closeTo(30, 0.001));
+  });
+
+  test('rotated bbox geometry clamps center within canvas bounds', () {
+    final box = BBoxEntity(
+      center: const Offset(12, 14),
+      w: 60,
+      h: 40,
+      angle: math.pi / 4,
+    );
+
+    final clamped = box.clampCenterWithin(const Size(120, 90));
+
+    expect(clamped, isNotNull);
+    expect(clamped!.fitsWithin(const Size(120, 90)), isTrue);
+  });
+
+  test('oversized rotated bbox reports that it cannot fit inside canvas', () {
+    final box = BBoxEntity(
+      center: const Offset(60, 45),
+      w: 140,
+      h: 100,
+      angle: math.pi / 4,
+    );
+
+    expect(box.clampCenterWithin(const Size(120, 90)), isNull);
+  });
+
+  testWidgets('controller exposes current frame for image source', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+    await drawTouchBox(tester);
+
+    final frame = await controller.getCurrentSourceFrame();
+
+    expect(frame, isNotNull);
+    expect(frame!.bytes, isNotEmpty);
+  });
+
+  testWidgets('drawing beyond editor edges still commits bbox inside canvas', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    await drawTouchBox(
+      tester,
+      startOffset: const Offset(-350, -180),
+      midOffset: const Offset(250, 120),
+      endOffset: const Offset(500, 400),
+    );
+
+    expect(controller.boxes.value, hasLength(1));
+    expect(controller.boxes.value.single.fitsWithin(controller.viewSize), isTrue);
+  });
+
+  testWidgets('selected bbox shows rotate and delete controls by default', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+    await drawTouchBox(tester);
+
+    expect(find.byIcon(Icons.crop_rotate), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
+  });
+
+  testWidgets('controls config hides rotate and delete controls and disables their interactions', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      buildHarnessWithPolicy(
+        controller,
+        ToolPolicy.enforced,
+        controlsConfig: const BBoxEditorControlsConfig(
+          showRotateControl: false,
+          showDeleteControl: false,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await drawTouchBox(tester);
+
+    expect(find.byIcon(Icons.crop_rotate), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+
+    final originalBox = controller.boxes.value.single;
+    final originalAngle = originalBox.angle;
+    controller.setCreationEnabled(false);
+
+    await tester.tapAt(editorGlobalPoint(tester, deleteControlCenter(originalBox)));
+    await tester.pumpAndSettle();
+
+    expect(controller.boxes.value, hasLength(1));
+
+    final rotateGesture = await tester.createGesture(
+      kind: PointerDeviceKind.touch,
+    );
+    final rotateStart = editorGlobalPoint(tester, rotateControlCenter(originalBox));
+    await rotateGesture.down(rotateStart);
+    await tester.pump();
+    await rotateGesture.moveTo(rotateStart + const Offset(24, 24));
+    await tester.pump();
+    await rotateGesture.up();
+    await tester.pumpAndSettle();
+
+    expect(controller.boxes.value, hasLength(1));
+    expect(controller.boxes.value.single.angle, originalAngle);
+  });
+
+  testWidgets('controller derived state tracks selection and box limit', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    controller.setMaxBoxCount(1);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    expect(controller.canCreateBoxesListenable.value, isTrue);
+    expect(controller.selectedBox, isNull);
+
+    await drawTouchBox(tester);
+
+    expect(controller.boxes.value, hasLength(1));
+    expect(controller.selectedBox?.id, controller.boxes.value.single.id);
+    expect(controller.canCreateBoxesListenable.value, isFalse);
+
+    await controller.removeBox(controller.boxes.value.single.id);
+
+    expect(controller.selectedBox, isNull);
+    expect(controller.canCreateBoxesListenable.value, isTrue);
+  });
+
+  testWidgets('controller camera state gates capture and resume actions', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    var captureCalls = 0;
+    var resumeCalls = 0;
+    final owner = Object();
+
+    controller.attachCamera(
+      owner: owner,
+      capture: () => captureCalls++,
+      resumePreview: () => resumeCalls++,
+    );
+    addTearDown(() => controller.detachCamera(owner));
+
+    expect(controller.cameraAttached.value, isTrue);
+    expect(controller.cameraCanCapture.value, isFalse);
+    expect(controller.cameraCanResumePreview.value, isFalse);
+
+    controller.captureCameraImage();
+    controller.resumeCameraPreview();
+    expect(captureCalls, 0);
+    expect(resumeCalls, 0);
+
+    controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: true,
+      isCaptureFrozen: false,
+      canCapture: true,
+      canResumePreview: false,
+    );
+    controller.captureCameraImage();
+    expect(captureCalls, 1);
+
+    controller.updateCameraState(
+      isAttached: true,
+      isPreviewActive: false,
+      isCaptureFrozen: true,
+      canCapture: false,
+      canResumePreview: true,
+    );
+    controller.resumeCameraPreview();
+    expect(resumeCalls, 1);
   });
 
   testWidgets('controller max box count blocks creations beyond limit', (

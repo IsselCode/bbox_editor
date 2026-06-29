@@ -15,6 +15,7 @@ class BBoxOverlay extends StatefulWidget {
     super.key,
     required this.viewSize, // tamaño del área del video (VISTA)
     required this.sourceResolution,
+    this.controlsConfig = const BBoxEditorControlsConfig(),
     this.zoomScale = 1,
     required this.isInteractive,
     this.onCommitBox, // (box, kind)
@@ -26,6 +27,7 @@ class BBoxOverlay extends StatefulWidget {
 
   final Size viewSize;
   final Size sourceResolution;
+  final BBoxEditorControlsConfig controlsConfig;
   final double zoomScale;
   final bool isInteractive;
   final List<BBoxEntity> initialBoxes;
@@ -235,10 +237,12 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
     for (final b in _boxes) {
       // ROTATE (overlay, no botón)
-      final rh = b.rotateHandle(_rotateHandleGapScaled);
-      final dr = (rh - pos).distance;
-      if (dr <= _rotateHandleHitRadiusScaled) {
-        candidates.add((id: b.id, handle: Handle.none, rotate: true, dist: dr));
+      if (widget.controlsConfig.showRotateControl) {
+        final rh = b.rotateHandle(_rotateHandleGapScaled);
+        final dr = (rh - pos).distance;
+        if (dr <= _rotateHandleHitRadiusScaled) {
+          candidates.add((id: b.id, handle: Handle.none, rotate: true, dist: dr));
+        }
       }
 
       // RESIZE handles
@@ -266,6 +270,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   }
 
   Offset? _rotateControlCenterFor(BBoxEntity? box) {
+    if (!widget.controlsConfig.showRotateControl) return null;
     if (box == null) return null;
     return _clampControlCenter(
       box.rotateHandle(_rotateHandleGapScaled),
@@ -274,6 +279,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   }
 
   Offset? _deleteControlCenterFor(BBoxEntity? box) {
+    if (!widget.controlsConfig.showDeleteControl) return null;
     if (box == null) return null;
     final tr = box.handlePositions()[Handle.tr];
     if (tr == null) return null;
@@ -286,6 +292,30 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   bool _isInsideControl(Offset pos, Offset? center, double size) {
     if (center == null) return false;
     return (center - pos).distance <= size / 2;
+  }
+
+  Offset _clampPointToCanvas(Offset point) {
+    return Offset(
+      point.dx.clamp(0.0, widget.viewSize.width).toDouble(),
+      point.dy.clamp(0.0, widget.viewSize.height).toDouble(),
+    );
+  }
+
+  BBoxEntity _resolveCandidateBox(
+    BBoxEntity candidate,
+    BBoxEntity fallback, {
+    required bool allowRecenter,
+  }) {
+    if (candidate.fitsWithin(widget.viewSize)) {
+      return candidate;
+    }
+    if (allowRecenter) {
+      final recentered = candidate.clampCenterWithin(widget.viewSize);
+      if (recentered != null && recentered.fitsWithin(widget.viewSize)) {
+        return recentered;
+      }
+    }
+    return fallback;
   }
 
   // --- Gestos ---
@@ -396,7 +426,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   void _onPanUpdate(DragUpdateDetails d) {
     if (!widget.isInteractive) return;
-    final pos = d.localPosition;
+    final pos = _clampPointToCanvas(d.localPosition);
     final live = _live;
     if (live == null) return;
 
@@ -404,7 +434,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       case Mode.draw:
         final s = _drawStart!;
         final cx = (s.dx + pos.dx) / 2, cy = (s.dy + pos.dy) / 2;
-        _live = BBoxEntity(
+        final candidate = BBoxEntity(
           id: live.id,
           center: Offset(cx, cy),
           w: (pos.dx - s.dx).abs().clamp(widget.minW, double.infinity),
@@ -412,6 +442,11 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: 0,
           color: Color(0xff0f52ff),
           tag: live.tag,
+        );
+        _live = _resolveCandidateBox(
+          candidate,
+          live,
+          allowRecenter: true,
         );
         break;
 
@@ -423,20 +458,19 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           local.dx * c - local.dy * s,
           local.dx * s + local.dy * c,
         );
-        var newCenter = pos - worldDelta;
-        final hw = live.w / 2, hh = live.h / 2;
-        newCenter = Offset(
-          newCenter.dx.clamp(hw, widget.viewSize.width - hw),
-          newCenter.dy.clamp(hh, widget.viewSize.height - hh),
-        );
-        _live = BBoxEntity(
+        final candidate = BBoxEntity(
           id: live.id,
-          center: newCenter,
+          center: pos - worldDelta,
           w: live.w,
           h: live.h,
           angle: live.angle,
           color: b.color,
           tag: b.tag,
+        );
+        _live = _resolveCandidateBox(
+          candidate,
+          live,
+          allowRecenter: true,
         );
         break;
 
@@ -446,7 +480,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         var ang = (_angleStart ?? 0) + (aNow - (_startVecAngle ?? 0));
         if (ang > math.pi) ang -= 2 * math.pi;
         if (ang < -math.pi) ang += 2 * math.pi;
-        _live = BBoxEntity(
+        final candidate = BBoxEntity(
           id: live.id,
           center: b.center,
           w: b.w,
@@ -455,17 +489,27 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           color: b.color,
           tag: b.tag,
         );
+        _live = _resolveCandidateBox(
+          candidate,
+          live,
+          allowRecenter: true,
+        );
         break;
 
       case Mode.resize:
         final base = _editBase ?? _boxes.last; // ← base congelada
-        _live = _resizeFromHandle(
+        final candidate = _resizeFromHandle(
           base,
           live,
           _activeHandle,
           pos,
           widget.minW,
           widget.minH,
+        );
+        _live = _resolveCandidateBox(
+          candidate,
+          live,
+          allowRecenter: false,
         );
         break;
 
@@ -696,6 +740,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
               boxes: _boxes,
               selectedId: _selected,
               live: _live,
+              showRotateControl: widget.controlsConfig.showRotateControl,
               resizeHandleVisualSize: _resizeHandleVisualSizeScaled,
               rotateHandleGap: _rotateHandleGapScaled,
               rotateControlSize: _rotateControlSizeScaled,
@@ -708,7 +753,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
             ),
           ),
 
-          if (sel != null && rotatePos != null)
+          if (sel != null &&
+              widget.controlsConfig.showRotateControl &&
+              rotatePos != null)
             Positioned(
               left: rotatePos.dx - (_rotateControlSizeScaled / 2),
               top: rotatePos.dy - (_rotateControlSizeScaled / 2),
@@ -723,7 +770,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
               ),
             ),
 
-          if (sel != null && deletePos != null)
+          if (sel != null &&
+              widget.controlsConfig.showDeleteControl &&
+              deletePos != null)
             Positioned(
               left: deletePos.dx - (_deleteControlSizeScaled / 2),
               top: deletePos.dy - (_deleteControlSizeScaled / 2),
@@ -746,6 +795,7 @@ class _MultiPainter extends CustomPainter {
   final List<BBoxEntity> boxes;
   final int? selectedId;
   final BBoxEntity? live;
+  final bool showRotateControl;
   final double resizeHandleVisualSize;
   final double rotateHandleGap;
   final double rotateControlSize;
@@ -760,6 +810,7 @@ class _MultiPainter extends CustomPainter {
     required this.boxes,
     this.selectedId,
     this.live,
+    required this.showRotateControl,
     required this.resizeHandleVisualSize,
     required this.rotateHandleGap,
     required this.rotateControlSize,
@@ -807,20 +858,22 @@ class _MultiPainter extends CustomPainter {
           canvas.drawCircle(p, resizeHandleVisualSize / 2, strokePaint);
         }
 
-        final rotateHandle = b.rotateHandle(rotateHandleGap);
-        canvas.drawCircle(
-          rotateHandle,
-          math.max(0, (rotateControlSize / 2) - rotateControlPadding),
-          fillPaint,
-        );
-        canvas.drawCircle(
-          rotateHandle,
-          math.max(0, (rotateControlSize / 2) - rotateControlPadding),
-          Paint()
-            ..color = Colors.black.withOpacity(0.35)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = rotateOutlineStrokeWidth,
-        );
+        if (showRotateControl) {
+          final rotateHandle = b.rotateHandle(rotateHandleGap);
+          canvas.drawCircle(
+            rotateHandle,
+            math.max(0, (rotateControlSize / 2) - rotateControlPadding),
+            fillPaint,
+          );
+          canvas.drawCircle(
+            rotateHandle,
+            math.max(0, (rotateControlSize / 2) - rotateControlPadding),
+            Paint()
+              ..color = Colors.black.withOpacity(0.35)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = rotateOutlineStrokeWidth,
+          );
+        }
       }
     }
     if (live != null) {
@@ -845,6 +898,7 @@ class _MultiPainter extends CustomPainter {
       old.boxes != boxes ||
       old.selectedId != selectedId ||
       old.live != live ||
+      old.showRotateControl != showRotateControl ||
       old.resizeHandleVisualSize != resizeHandleVisualSize ||
       old.rotateHandleGap != rotateHandleGap ||
       old.rotateControlSize != rotateControlSize ||
