@@ -114,14 +114,14 @@ En `captureStill`, el flujo recomendado es externo al widget:
 
 ```dart
 FilledButton(
-  onPressed: controller.cameraCanCapture.value
+  onPressed: controller.cameraCanCapture
       ? controller.captureCameraImage
       : null,
   child: const Text('Capture'),
 );
 
 OutlinedButton(
-  onPressed: controller.cameraCanResumePreview.value
+  onPressed: controller.cameraCanResumePreview
       ? controller.resumeCameraPreview
       : null,
   child: const Text('Resume Camera'),
@@ -130,7 +130,9 @@ OutlinedButton(
 
 ## Estado del controlador
 
-`BBoxEditorController` ya expone el estado útil para integrar tu UI:
+`BBoxEditorController` ya expone el estado útil para integrar tu UI. Los
+flags de cámara son getters simples y notifican cambios a través del propio
+controller:
 
 - `boxes`
 - `selectedBox`
@@ -150,10 +152,9 @@ Ejemplo:
 ```dart
 AnimatedBuilder(
   animation: Listenable.merge([
+    controller,
     controller.boxes,
     controller.selectedBoxListenable,
-    controller.cameraCanCapture,
-    controller.cameraCanResumePreview,
   ]),
   builder: (context, _) {
     return Column(

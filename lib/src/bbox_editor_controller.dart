@@ -58,11 +58,20 @@ class BBoxEditorController extends ChangeNotifier {
   final ValueNotifier<BBoxEntity?> selectedBoxListenable = ValueNotifier(null);
   BBoxEntity? get selectedBox => selectedBoxListenable.value;
 
-  final ValueNotifier<bool> cameraAttached = ValueNotifier(false);
-  final ValueNotifier<bool> cameraPreviewActive = ValueNotifier(false);
-  final ValueNotifier<bool> cameraCaptureFrozen = ValueNotifier(false);
-  final ValueNotifier<bool> cameraCanCapture = ValueNotifier(false);
-  final ValueNotifier<bool> cameraCanResumePreview = ValueNotifier(false);
+  bool _cameraAttached = false;
+  bool get cameraAttached => _cameraAttached;
+
+  bool _cameraPreviewActive = false;
+  bool get cameraPreviewActive => _cameraPreviewActive;
+
+  bool _cameraCaptureFrozen = false;
+  bool get cameraCaptureFrozen => _cameraCaptureFrozen;
+
+  bool _cameraCanCapture = false;
+  bool get cameraCanCapture => _cameraCanCapture;
+
+  bool _cameraCanResumePreview = false;
+  bool get cameraCanResumePreview => _cameraCanResumePreview;
 
   final ValueNotifier<BBoxFrameData?> currentSourceFrame = ValueNotifier(null);
   final ValueNotifier<BBoxFrameData?> capturedSourceFrame = ValueNotifier(null);
@@ -166,21 +175,28 @@ class BBoxEditorController extends ChangeNotifier {
     required bool canCapture,
     required bool canResumePreview,
   }) {
-    if (cameraAttached.value != isAttached) {
-      cameraAttached.value = isAttached;
+    var changed = false;
+    if (_cameraAttached != isAttached) {
+      _cameraAttached = isAttached;
+      changed = true;
     }
-    if (cameraPreviewActive.value != isPreviewActive) {
-      cameraPreviewActive.value = isPreviewActive;
+    if (_cameraPreviewActive != isPreviewActive) {
+      _cameraPreviewActive = isPreviewActive;
+      changed = true;
     }
-    if (cameraCaptureFrozen.value != isCaptureFrozen) {
-      cameraCaptureFrozen.value = isCaptureFrozen;
+    if (_cameraCaptureFrozen != isCaptureFrozen) {
+      _cameraCaptureFrozen = isCaptureFrozen;
+      changed = true;
     }
-    if (cameraCanCapture.value != canCapture) {
-      cameraCanCapture.value = canCapture;
+    if (_cameraCanCapture != canCapture) {
+      _cameraCanCapture = canCapture;
+      changed = true;
     }
-    if (cameraCanResumePreview.value != canResumePreview) {
-      cameraCanResumePreview.value = canResumePreview;
+    if (_cameraCanResumePreview != canResumePreview) {
+      _cameraCanResumePreview = canResumePreview;
+      changed = true;
     }
+    if (changed) notifyListeners();
   }
 
   void updateCurrentSourceFrame(BBoxFrameData? frame) {
@@ -206,12 +222,12 @@ class BBoxEditorController extends ChangeNotifier {
   }
 
   void captureCameraImage() {
-    if (!cameraCanCapture.value) return;
+    if (!cameraCanCapture) return;
     _cameraCapture?.call();
   }
 
   void resumeCameraPreview() {
-    if (!cameraCanResumePreview.value) return;
+    if (!cameraCanResumePreview) return;
     _cameraResumePreview?.call();
   }
 
@@ -456,11 +472,6 @@ class BBoxEditorController extends ChangeNotifier {
     canCreateBoxesListenable.dispose();
     boxes.dispose();
     selectedBoxListenable.dispose();
-    cameraAttached.dispose();
-    cameraPreviewActive.dispose();
-    cameraCaptureFrozen.dispose();
-    cameraCanCapture.dispose();
-    cameraCanResumePreview.dispose();
     currentSourceFrame.dispose();
     capturedSourceFrame.dispose();
     _events.close();

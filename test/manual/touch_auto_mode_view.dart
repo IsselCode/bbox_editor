@@ -816,10 +816,9 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
             children: [
               AnimatedBuilder(
                 animation: Listenable.merge([
+                  _controller,
                   _controller.bBoxTool,
                   _controller.boxes,
-                  _controller.cameraCanCapture,
-                  _controller.cameraCanResumePreview,
                 ]),
                 builder: (context, _) {
                   final tool = _controller.bBoxTool.value;
@@ -975,9 +974,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
                                           Expanded(
                                             child: FilledButton.tonalIcon(
                                               onPressed:
-                                                  _controller
-                                                      .cameraCanCapture
-                                                      .value
+                                                  _controller.cameraCanCapture
                                                   ? () {
                                                       _pushMessage(
                                                         'Action -> Capture',
@@ -998,7 +995,6 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
                                               onPressed:
                                                   _controller
                                                       .cameraCanResumePreview
-                                                      .value
                                                   ? () {
                                                       _pushMessage(
                                                         'Action -> Resume Camera',
