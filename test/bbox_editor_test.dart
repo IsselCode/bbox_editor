@@ -601,6 +601,32 @@ void main() {
     },
   );
 
+  testWidgets('mobile auto mode keeps scale enabled for pinch gestures', (
+    tester,
+  ) async {
+    final previousPlatform = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final controller = BBoxEditorController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        buildHarnessWithPolicy(controller, ToolPolicy.platformDefault),
+      );
+      await tester.pumpAndSettle();
+
+      final viewer = tester.widget<InteractiveViewer>(
+        find.byType(InteractiveViewer),
+      );
+      final overlay = tester.widget<BBoxOverlay>(find.byType(BBoxOverlay));
+      expect(viewer.scaleEnabled, isTrue);
+      expect(viewer.panEnabled, isFalse);
+      expect(overlay.isInteractive, isTrue);
+    } finally {
+      debugDefaultTargetPlatformOverride = previousPlatform;
+    }
+  });
+
   testWidgets('desktop auto mode enables zoom and bbox editing together', (
     tester,
   ) async {

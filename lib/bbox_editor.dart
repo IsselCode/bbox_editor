@@ -326,7 +326,16 @@ class _BBoxEditorState extends State<BBoxEditor> {
   }
 
   // Flags ya resueltos para que el widget no repita lógica
-  bool get allowZoom {
+  bool get allowScale {
+    final p = widget.policy;
+    if (effectiveTool == BBoxTool.auto) {
+      if (isDesktopLike && p != ToolPolicy.enforced) return true;
+      return true;
+    }
+    return effectiveTool == BBoxTool.zoom;
+  }
+
+  bool get allowPan {
     final p = widget.policy;
     if (effectiveTool == BBoxTool.auto) {
       if (isDesktopLike && p != ToolPolicy.enforced) return true;
@@ -372,8 +381,8 @@ class _BBoxEditorState extends State<BBoxEditor> {
                 child: InteractiveViewer(
                   maxScale: 4,
                   minScale: 1,
-                  scaleEnabled: allowZoom,
-                  panEnabled: allowZoom,
+                  scaleEnabled: allowScale,
+                  panEnabled: allowPan,
                   transformationController: _tc,
                   child: Stack(
                     fit: StackFit.expand,
