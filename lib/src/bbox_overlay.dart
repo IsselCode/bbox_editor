@@ -46,6 +46,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   int? _selected; // id seleccionado
   Mode _mode = Mode.idle;
   Handle _activeHandle = Handle.none;
+  int? _activeTouchPointer;
+  Offset? _touchDownPosition;
+  bool _touchDragStarted = false;
 
   // edición
   BBoxEntity? _live; // copia mientras editas
@@ -349,28 +352,71 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   void _handlePointerDown(PointerDownEvent event) {
     if (event.kind != PointerDeviceKind.touch) return;
-    final becameMultiTouch =
-        _touchPointers.length < 2 &&
-        _touchPointers.toSet().followedBy([event.pointer]).toSet().length >= 2;
+    final hadMultiTouch = _isMultiTouchGesture;
     if (_touchPointers.add(event.pointer) && mounted) {
-      if (becameMultiTouch) {
-        _cancelEdit();
+      if (!hadMultiTouch && _isMultiTouchGesture) {
+        _clearTouchInteraction(cancelEdit: true);
+      } else if (_touchPointers.length == 1) {
+        _activeTouchPointer = event.pointer;
+        _touchDownPosition = event.localPosition;
+        _touchDragStarted = false;
       }
       setState(() {});
     }
   }
 
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    if (event.pointer != _activeTouchPointer) return;
+    if (_isMultiTouchGesture) return;
+    final start = _touchDownPosition;
+    if (start == null) return;
+
+    if (!_touchDragStarted) {
+      if ((event.localPosition - start).distance <= kTouchSlop) return;
+      _touchDragStarted = true;
+      _handlePanStartAt(start);
+    }
+
+    _handlePanUpdateAt(event.localPosition);
+  }
+
   void _handlePointerFinish(PointerEvent event) {
     if (event.kind != PointerDeviceKind.touch) return;
-    if (_touchPointers.remove(event.pointer) && mounted) {
+    final wasActivePointer = event.pointer == _activeTouchPointer;
+    final wasMultiTouch = _isMultiTouchGesture;
+
+    _touchPointers.remove(event.pointer);
+
+    if (wasActivePointer) {
+      if (_touchDragStarted && !wasMultiTouch) {
+        _finishPanInteraction();
+      } else if (!_touchDragStarted && !wasMultiTouch) {
+        _handleTapAt(event.localPosition);
+      }
+      _clearTouchInteraction(cancelEdit: false);
+    } else if (_activeTouchPointer != null &&
+        !_touchPointers.contains(_activeTouchPointer)) {
+      _clearTouchInteraction(cancelEdit: false);
+    }
+
+    if (mounted) {
       setState(() {});
     }
   }
 
+  void _clearTouchInteraction({required bool cancelEdit}) {
+    _activeTouchPointer = null;
+    _touchDownPosition = null;
+    _touchDragStarted = false;
+    if (cancelEdit) {
+      _cancelEdit();
+    }
+  }
+
   // --- Gestos ---
-  void _onTapUp(TapUpDetails d) async {
+  void _handleTapAt(Offset pos) {
     if (!widget.isInteractive) return;
-    final pos = d.localPosition;
     if (_isInsideControl(
       pos,
       _deleteControlCenterFor(_selectedBox),
@@ -393,9 +439,8 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     }
   }
 
-  void _onPanStart(DragStartDetails d) {
+  void _handlePanStartAt(Offset pos) {
     if (!widget.isInteractive) return;
-    final pos = d.localPosition;
     if (_isInsideControl(
       pos,
       _deleteControlCenterFor(_selectedBox),
@@ -492,9 +537,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     setState(() {});
   }
 
-  void _onPanUpdate(DragUpdateDetails d) {
+  void _handlePanUpdateAt(Offset localPosition) {
     if (!widget.isInteractive) return;
-    final pos = _clampPointToCanvas(d.localPosition);
+    final pos = _clampPointToCanvas(localPosition);
     final live = _live;
     if (live == null) return;
 
@@ -574,13 +619,21 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     setState(() {});
   }
 
-  Future<void> _onPanEnd() async {
+  Future<void> _finishPanInteraction() async {
     if (!widget.isInteractive) {
       _cancelEdit();
       return;
     }
     await _endEdit(commit: true);
   }
+
+  void _onTapUp(TapUpDetails d) => _handleTapAt(d.localPosition);
+
+  void _onPanStart(DragStartDetails d) => _handlePanStartAt(d.localPosition);
+
+  void _onPanUpdate(DragUpdateDetails d) => _handlePanUpdateAt(d.localPosition);
+
+  Future<void> _onPanEnd() => _finishPanInteraction();
 
   void _cancelEdit() {
     _mode = Mode.idle;
@@ -847,11 +900,18 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _handlePointerDown,
+      onPointerMove: _handlePointerMove,
       onPointerUp: _handlePointerFinish,
       onPointerCancel: _handlePointerFinish,
       child: IgnorePointer(
         ignoring: _isMultiTouchGesture,
         child: GestureDetector(
+          supportedDevices: const <PointerDeviceKind>{
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.stylus,
+            PointerDeviceKind.invertedStylus,
+            PointerDeviceKind.trackpad,
+          },
           behavior: HitTestBehavior.opaque,
           onPanStart: _onPanStart,
           onPanUpdate: _onPanUpdate,
