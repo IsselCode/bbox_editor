@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../exports.dart';
 
@@ -41,6 +42,7 @@ class BBoxOverlay extends StatefulWidget {
 
 class _BBoxOverlayState extends State<BBoxOverlay> {
   final List<BBoxEntity> _boxes = [];
+  final Set<int> _touchPointers = <int>{};
   int? _selected; // id seleccionado
   Mode _mode = Mode.idle;
   Handle _activeHandle = Handle.none;
@@ -80,6 +82,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   BBoxInteractionMode get _interactionMode =>
       widget.controlsConfig.interactionMode;
+  bool get _isMultiTouchGesture => _touchPointers.length >= 2;
 
   @override
   void initState() {
@@ -342,6 +345,26 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       }
     }
     return fallback;
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    final becameMultiTouch =
+        _touchPointers.length < 2 &&
+        _touchPointers.toSet().followedBy([event.pointer]).toSet().length >= 2;
+    if (_touchPointers.add(event.pointer) && mounted) {
+      if (becameMultiTouch) {
+        _cancelEdit();
+      }
+      setState(() {});
+    }
+  }
+
+  void _handlePointerFinish(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.touch) return;
+    if (_touchPointers.remove(event.pointer) && mounted) {
+      setState(() {});
+    }
   }
 
   // --- Gestos ---
@@ -821,68 +844,77 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     final rotatePos = _rotateControlCenterFor(sel);
     final deletePos = _deleteControlCenterFor(sel);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onPanStart: _onPanStart,
-      onPanUpdate: _onPanUpdate,
-      onTapUp: _onTapUp,
-      onPanEnd: (_) => _onPanEnd(),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          CustomPaint(
-            painter: _MultiPainter(
-              boxes: _boxes,
-              selectedId: _selected,
-              live: _live,
-              showRotateControl: widget.controlsConfig.showRotateControl,
-              resizeHandleVisualSize: _resizeHandleVisualSizeScaled,
-              rotateHandleGap: _rotateHandleGapScaled,
-              rotateControlSize: _rotateControlSizeScaled,
-              rotateControlPadding: _rotateControlPaddingScaled,
-              selectedStrokeWidth: _selectedStrokeWidthScaled,
-              boxStrokeWidth: _boxStrokeWidthScaled,
-              handleStrokeWidth: _handleStrokeWidthScaled,
-              rotateOutlineStrokeWidth: _rotateOutlineStrokeWidthScaled,
-              liveStrokeWidth: _liveStrokeWidthScaled,
-            ),
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handlePointerDown,
+      onPointerUp: _handlePointerFinish,
+      onPointerCancel: _handlePointerFinish,
+      child: IgnorePointer(
+        ignoring: _isMultiTouchGesture,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanStart: _onPanStart,
+          onPanUpdate: _onPanUpdate,
+          onTapUp: _onTapUp,
+          onPanEnd: (_) => _onPanEnd(),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CustomPaint(
+                painter: _MultiPainter(
+                  boxes: _boxes,
+                  selectedId: _selected,
+                  live: _live,
+                  showRotateControl: widget.controlsConfig.showRotateControl,
+                  resizeHandleVisualSize: _resizeHandleVisualSizeScaled,
+                  rotateHandleGap: _rotateHandleGapScaled,
+                  rotateControlSize: _rotateControlSizeScaled,
+                  rotateControlPadding: _rotateControlPaddingScaled,
+                  selectedStrokeWidth: _selectedStrokeWidthScaled,
+                  boxStrokeWidth: _boxStrokeWidthScaled,
+                  handleStrokeWidth: _handleStrokeWidthScaled,
+                  rotateOutlineStrokeWidth: _rotateOutlineStrokeWidthScaled,
+                  liveStrokeWidth: _liveStrokeWidthScaled,
+                ),
+              ),
+
+              ..._buildTagPills(context),
+
+              if (sel != null &&
+                  widget.controlsConfig.showRotateControl &&
+                  rotatePos != null)
+                Positioned(
+                  left: rotatePos.dx - (_rotateControlSizeScaled / 2),
+                  top: rotatePos.dy - (_rotateControlSizeScaled / 2),
+                  child: _buildFloatingControl(
+                    onPressed: null,
+                    icon: Icons.crop_rotate,
+                    iconColor: Colors.white,
+                    backgroundColor: Colors.black.withOpacity(0.72),
+                    size: _rotateControlSizeScaled,
+                    iconSize: _controlIconSizeScaled,
+                    ignorePointer: true,
+                  ),
+                ),
+
+              if (sel != null &&
+                  widget.controlsConfig.showDeleteControl &&
+                  deletePos != null)
+                Positioned(
+                  left: deletePos.dx - (_deleteControlSizeScaled / 2),
+                  top: deletePos.dy - (_deleteControlSizeScaled / 2),
+                  child: _buildFloatingControl(
+                    onPressed: _deleteSelected,
+                    icon: Icons.delete_outline,
+                    iconColor: Colors.white,
+                    backgroundColor: const Color(0xFFE5484D),
+                    size: _deleteControlSizeScaled,
+                    iconSize: _controlIconSizeScaled,
+                  ),
+                ),
+            ],
           ),
-
-          ..._buildTagPills(context),
-
-          if (sel != null &&
-              widget.controlsConfig.showRotateControl &&
-              rotatePos != null)
-            Positioned(
-              left: rotatePos.dx - (_rotateControlSizeScaled / 2),
-              top: rotatePos.dy - (_rotateControlSizeScaled / 2),
-              child: _buildFloatingControl(
-                onPressed: null,
-                icon: Icons.crop_rotate,
-                iconColor: Colors.white,
-                backgroundColor: Colors.black.withOpacity(0.72),
-                size: _rotateControlSizeScaled,
-                iconSize: _controlIconSizeScaled,
-                ignorePointer: true,
-              ),
-            ),
-
-          if (sel != null &&
-              widget.controlsConfig.showDeleteControl &&
-              deletePos != null)
-            Positioned(
-              left: deletePos.dx - (_deleteControlSizeScaled / 2),
-              top: deletePos.dy - (_deleteControlSizeScaled / 2),
-              child: _buildFloatingControl(
-                onPressed: _deleteSelected,
-                icon: Icons.delete_outline,
-                iconColor: Colors.white,
-                backgroundColor: const Color(0xFFE5484D),
-                size: _deleteControlSizeScaled,
-                iconSize: _controlIconSizeScaled,
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
