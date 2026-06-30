@@ -91,6 +91,20 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> touchMoveAndRelease(
+    WidgetTester tester,
+    Offset start,
+    Offset end,
+  ) async {
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.touch);
+    await gesture.down(start);
+    await tester.pump();
+    await gesture.moveTo(end);
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('controller defaults to auto tool', (tester) async {
     final controller = BBoxEditorController();
     addTearDown(controller.dispose);
@@ -124,6 +138,55 @@ void main() {
 
     expect(controller.boxes.value, isEmpty);
   });
+
+  testWidgets('small touch movement on empty canvas does not create a bbox', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    final start = tester.getCenter(find.byType(BBoxEditor));
+    await touchMoveAndRelease(tester, start, start + const Offset(6, 4));
+
+    expect(controller.boxes.value, isEmpty);
+  });
+
+  testWidgets(
+    'short deliberate drag below resize minimum does not create a bbox',
+    (tester) async {
+      final controller = BBoxEditorController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(buildHarness(controller));
+      await tester.pumpAndSettle();
+
+      final start = tester.getCenter(find.byType(BBoxEditor));
+      await dragFromTo(tester, start, start + const Offset(14, 14));
+
+      expect(controller.boxes.value, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'valid create commits once it reaches the same minimum as resize',
+    (tester) async {
+      final controller = BBoxEditorController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(buildHarness(controller));
+      await tester.pumpAndSettle();
+
+      final start = tester.getCenter(find.byType(BBoxEditor));
+      await dragFromTo(tester, start, start + const Offset(24, 24));
+
+      expect(controller.boxes.value, hasLength(1));
+      expect(controller.boxes.value.single.w, greaterThanOrEqualTo(20));
+      expect(controller.boxes.value.single.h, greaterThanOrEqualTo(20));
+    },
+  );
 
   test('frame relative centers are local to crop size', () {
     final frame = BBoxFrameGeometry();
@@ -544,6 +607,102 @@ void main() {
     expect(moved.id, original.id);
     expect(moved.center.dx, greaterThan(original.center.dx));
     expect(moved.center.dy, greaterThan(original.center.dy));
+  });
+
+  testWidgets('small touch movement over a box still behaves like tap select', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      buildHarnessWithPolicy(
+        controller,
+        ToolPolicy.enforced,
+        controlsConfig: const BBoxEditorControlsConfig(
+          interactionMode: BBoxInteractionMode.selectBeforeEdit,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final original = BBoxEntity(
+      id: 3,
+      center: const Offset(320, 180),
+      w: 160,
+      h: 90,
+      tag: 'tap-select',
+    );
+    await controller.addBox(original);
+    await controller.setSelectedBox(null);
+    await tester.pumpAndSettle();
+
+    final start = editorGlobalPoint(tester, original.center);
+    await touchMoveAndRelease(tester, start, start + const Offset(5, 3));
+
+    expect(controller.boxes.value, hasLength(1));
+    expect(controller.selectedBox?.id, original.id);
+    expect(controller.boxes.value.single.center, original.center);
+  });
+
+  testWidgets('small touch movement on a selected box commits drag', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    final original = BBoxEntity(
+      id: 4,
+      center: const Offset(320, 180),
+      w: 160,
+      h: 90,
+      tag: 'small-drag',
+    );
+    await controller.addBox(original);
+    await controller.setSelectedBox(original.id);
+    await tester.pumpAndSettle();
+
+    final start = editorGlobalPoint(tester, original.center);
+    await touchMoveAndRelease(tester, start, start + const Offset(5, 3));
+
+    expect(controller.boxes.value, hasLength(1));
+    final moved = controller.boxes.value.single;
+    expect(moved.center.dx, greaterThan(original.center.dx));
+    expect(moved.center.dy, greaterThan(original.center.dy));
+  });
+
+  testWidgets('small touch movement on a resize handle commits resize', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    final original = BBoxEntity(
+      id: 5,
+      center: const Offset(320, 180),
+      w: 160,
+      h: 90,
+      tag: 'small-resize',
+    );
+    await controller.addBox(original);
+    await controller.setSelectedBox(original.id);
+    await tester.pumpAndSettle();
+
+    final box = controller.boxes.value.single;
+    final handle = box.handlePositions()[Handle.br]!;
+    final start = editorGlobalPoint(tester, handle);
+    await touchMoveAndRelease(tester, start, start + const Offset(5, 3));
+
+    expect(controller.boxes.value, hasLength(1));
+    final resized = controller.boxes.value.single;
+    expect(resized.w, greaterThan(original.w));
+    expect(resized.h, greaterThan(original.h));
   });
 
   testWidgets('controller max box count blocks creations beyond limit', (

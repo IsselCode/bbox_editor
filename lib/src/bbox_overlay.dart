@@ -82,6 +82,8 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   double get _tagHorizontalPaddingScaled => 8 / _zoomScale;
   double get _tagCornerRadiusScaled => 999 / _zoomScale;
   double get _tagYOffsetScaled => 8 / _zoomScale;
+  bool _isCreateSizeValid(double width, double height) =>
+      width >= widget.minW && height >= widget.minH;
 
   BBoxInteractionMode get _interactionMode =>
       widget.controlsConfig.interactionMode;
@@ -373,7 +375,6 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     if (start == null) return;
 
     if (!_touchDragStarted) {
-      if ((event.localPosition - start).distance <= kTouchSlop) return;
       _touchDragStarted = true;
       _handlePanStartAt(start);
     }
@@ -385,13 +386,26 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     if (event.kind != PointerDeviceKind.touch) return;
     final wasActivePointer = event.pointer == _activeTouchPointer;
     final wasMultiTouch = _isMultiTouchGesture;
+    final start = _touchDownPosition;
+    final movedEnoughForDrag =
+        start != null && (event.localPosition - start).distance > kTouchSlop;
+    final currentMode = _mode;
 
     _touchPointers.remove(event.pointer);
 
     if (wasActivePointer) {
-      if (_touchDragStarted && !wasMultiTouch) {
+      final canCommitCreate =
+          currentMode == Mode.draw &&
+          _live != null &&
+          _isCreateSizeValid(_live!.w, _live!.h);
+      final shouldCommitEdit =
+          _touchDragStarted &&
+          !wasMultiTouch &&
+          (canCommitCreate || movedEnoughForDrag || currentMode != Mode.draw);
+      if (shouldCommitEdit) {
         _finishPanInteraction();
-      } else if (!_touchDragStarted && !wasMultiTouch) {
+      } else if (!wasMultiTouch) {
+        _cancelEdit();
         _handleTapAt(event.localPosition);
       }
       _clearTouchInteraction(cancelEdit: false);
@@ -546,14 +560,19 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     switch (_mode) {
       case Mode.draw:
         final s = _drawStart!;
+        final width = math.max((pos.dx - s.dx).abs(), 1).toDouble();
+        final height = math.max((pos.dy - s.dy).abs(), 1).toDouble();
         final cx = (s.dx + pos.dx) / 2, cy = (s.dy + pos.dy) / 2;
+        final isValidCreate = _isCreateSizeValid(width, height);
         final candidate = BBoxEntity(
           id: live.id,
           center: Offset(cx, cy),
-          w: (pos.dx - s.dx).abs().clamp(widget.minW, double.infinity),
-          h: (pos.dy - s.dy).abs().clamp(widget.minH, double.infinity),
+          w: width,
+          h: height,
           angle: 0,
-          color: Color(0xff0f52ff),
+          color: isValidCreate
+              ? const Color(0xff0f52ff)
+              : const Color(0xFFE5484D),
           tag: live.tag,
           showTag: live.showTag,
         );
@@ -655,6 +674,10 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
       if (isCreate) {
         if (!widget.controller.canCreateBoxes) {
+          _cancelEdit();
+          return;
+        }
+        if (!_isCreateSizeValid(live.w, live.h)) {
           _cancelEdit();
           return;
         }
@@ -1070,7 +1093,7 @@ class _MultiPainter extends CustomPainter {
       canvas.drawPath(
         path,
         Paint()
-          ..color = Color(0xff0f52ff)
+          ..color = live!.color
           ..style = PaintingStyle.stroke
           ..strokeWidth = liveStrokeWidth,
       );
