@@ -189,6 +189,22 @@ BBoxEditor(
 );
 ```
 
+## Tags visibles
+
+Cada `BBoxEntity` puede mostrar su `tag` como un pill encima del bbox:
+
+```dart
+final box = BBoxEntity(
+  center: const Offset(300, 200),
+  w: 180,
+  h: 120,
+  tag: 'person',
+  showTag: true,
+);
+```
+
+Si `showTag` es `false`, el pill no se renderiza aunque exista `tag`.
+
 ## Modos de edición
 
 - `BBoxTool.auto`: decide entre edición y zoom según plataforma y gesto
@@ -200,6 +216,24 @@ controller.setTool(BBoxTool.auto);
 controller.setCreationEnabled(true);
 controller.setMaxBoxCount(5);
 ```
+
+## Interacción del overlay
+
+Puedes cambiar el modo global de interacción del overlay:
+
+```dart
+BBoxEditor(
+  image: MemoryImage(bytes),
+  sourceResolution: const Size(1920, 1080),
+  controller: controller,
+  controlsConfig: const BBoxEditorControlsConfig(
+    interactionMode: BBoxInteractionMode.selectBeforeEdit,
+  ),
+);
+```
+
+- `BBoxInteractionMode.directEdit`: al arrastrar un bbox lo editas directamente
+- `BBoxInteractionMode.selectBeforeEdit`: primero seleccionas con tap y luego arrastras; si haces drag sobre un bbox no seleccionado, puedes crear otro encima
 
 ## Eventos
 

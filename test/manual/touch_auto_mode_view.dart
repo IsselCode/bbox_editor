@@ -39,6 +39,7 @@ class _TouchAutoModeDemoScreen extends StatefulWidget {
 
 class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
   final BBoxEditorController _controller = BBoxEditorController();
+  final TextEditingController _tagController = TextEditingController();
   final List<String> _events = <String>[];
   static const Map<BBoxTool, String> _toolLabels = {
     BBoxTool.auto: 'Auto',
@@ -76,6 +77,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
   bool _creationEnabled = true;
   bool _showRotateControl = true;
   bool _showDeleteControl = true;
+  bool _selectBeforeEdit = false;
   int _maxBoxes = 3;
   _DemoSource _source = _DemoSource.cameraLive;
   MemoryImage? _demoImage;
@@ -84,6 +86,9 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
   BBoxEditorControlsConfig get _controlsConfig => BBoxEditorControlsConfig(
     showRotateControl: _showRotateControl,
     showDeleteControl: _showDeleteControl,
+    interactionMode: _selectBeforeEdit
+        ? BBoxInteractionMode.selectBeforeEdit
+        : BBoxInteractionMode.directEdit,
   );
 
   @override
@@ -91,13 +96,28 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
     super.initState();
     _controller.setCreationEnabled(_creationEnabled);
     _controller.setMaxBoxCount(_maxBoxes);
+    _controller.selectedBoxListenable.addListener(_syncTagInputWithSelection);
     _prepareDemoImage();
   }
 
   @override
   void dispose() {
+    _controller.selectedBoxListenable.removeListener(
+      _syncTagInputWithSelection,
+    );
+    _tagController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _syncTagInputWithSelection() {
+    final selected = _controller.selectedBox;
+    final nextText = selected?.tag ?? '';
+    if (_tagController.text == nextText) return;
+    _tagController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
   }
 
   void _setTool(BBoxTool tool) {
@@ -124,6 +144,11 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
   void _setShowDeleteControl(bool value) {
     setState(() => _showDeleteControl = value);
     _pushMessage('Config -> Delete control ${value ? 'on' : 'off'}');
+  }
+
+  void _setSelectBeforeEdit(bool value) {
+    setState(() => _selectBeforeEdit = value);
+    _pushMessage('Config -> Select first ${value ? 'on' : 'off'}');
   }
 
   Future<void> _prepareDemoImage() async {
@@ -202,6 +227,19 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
     final next = (_maxBoxes + delta).clamp(0, 99);
     _controller.setMaxBoxCount(next);
     setState(() => _maxBoxes = next);
+  }
+
+  Future<void> _assignTagToSelected() async {
+    final selected = _controller.selectedBox;
+    if (selected == null) return;
+    final normalizedTag = _tagController.text.trim();
+    await _controller.updateBox(
+      selected.id,
+      selected.copyWith(tag: normalizedTag.isEmpty ? null : normalizedTag),
+    );
+    _pushMessage(
+      'Tag -> ${normalizedTag.isEmpty ? 'cleared' : normalizedTag} for box ${selected.id}',
+    );
   }
 
   void _setSource(_DemoSource source) {
@@ -709,6 +747,27 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
       length: 2,
       child: Column(
         children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _tagController,
+                  decoration: const InputDecoration(
+                    labelText: 'Tag',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _assignTagToSelected(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _assignTagToSelected,
+                child: const Text('Asignar'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           const TabBar(
             tabs: [
               Tab(text: 'View'),
@@ -874,6 +933,16 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
                           Switch(
                             value: _showDeleteControl,
                             onChanged: _setShowDeleteControl,
+                          ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('Select First'),
+                          Switch(
+                            value: _selectBeforeEdit,
+                            onChanged: _setSelectBeforeEdit,
                           ),
                         ],
                       ),

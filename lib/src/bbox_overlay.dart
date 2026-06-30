@@ -72,6 +72,14 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   double get _rotateOutlineStrokeWidthScaled => 1.5 / _zoomScale;
   double get _liveStrokeWidthScaled => 2 / _zoomScale;
   double get _rotateControlPaddingScaled => 5 / _zoomScale;
+  double get _tagFontSizeScaled => 12 / _zoomScale;
+  double get _tagVerticalPaddingScaled => 4 / _zoomScale;
+  double get _tagHorizontalPaddingScaled => 8 / _zoomScale;
+  double get _tagCornerRadiusScaled => 999 / _zoomScale;
+  double get _tagYOffsetScaled => 8 / _zoomScale;
+
+  BBoxInteractionMode get _interactionMode =>
+      widget.controlsConfig.interactionMode;
 
   @override
   void initState() {
@@ -86,6 +94,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: b.angle,
           color: b.color,
           tag: b.tag,
+          showTag: b.showTag,
         ),
       ),
     );
@@ -108,6 +117,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
                 angle: b.angle,
                 color: b.color,
                 tag: b.tag,
+                showTag: b.showTag,
               ),
             ),
           );
@@ -144,6 +154,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
                   angle: b.angle,
                   color: b.color,
                   tag: b.tag,
+                  showTag: b.showTag,
                 ),
               ),
             );
@@ -235,24 +246,39 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   ({int id, Handle handle, bool rotate, double dist})? _hitTest(Offset pos) {
     final candidates = <({int id, Handle handle, bool rotate, double dist})>[];
 
-    for (final b in _boxes) {
+    for (var index = 0; index < _boxes.length; index++) {
+      final b = _boxes[index];
+      final isSelected = b.id == _selected;
       // ROTATE (overlay, no botón)
-      if (widget.controlsConfig.showRotateControl) {
+      if (widget.controlsConfig.showRotateControl &&
+          (_interactionMode == BBoxInteractionMode.directEdit || isSelected)) {
         final rh = b.rotateHandle(_rotateHandleGapScaled);
         final dr = (rh - pos).distance;
         if (dr <= _rotateHandleHitRadiusScaled) {
-          candidates.add((id: b.id, handle: Handle.none, rotate: true, dist: dr));
+          candidates.add((
+            id: b.id,
+            handle: Handle.none,
+            rotate: true,
+            dist: dr - (index / 1000),
+          ));
         }
       }
 
       // RESIZE handles
-      final hs = b.handlePositions();
-      hs.forEach((h, p) {
-        final d = (p - pos).distance;
-        if (d <= _resizeHandleHitRadiusScaled) {
-          candidates.add((id: b.id, handle: h, rotate: false, dist: d));
-        }
-      });
+      if (_interactionMode == BBoxInteractionMode.directEdit || isSelected) {
+        final hs = b.handlePositions();
+        hs.forEach((h, p) {
+          final d = (p - pos).distance;
+          if (d <= _resizeHandleHitRadiusScaled) {
+            candidates.add((
+              id: b.id,
+              handle: h,
+              rotate: false,
+              dist: d - (index / 1000),
+            ));
+          }
+        });
+      }
 
       // DRAG interior
       if (b.contains(pos)) {
@@ -260,7 +286,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           id: b.id,
           handle: Handle.none,
           rotate: false,
-          dist: _resizeHandleHitRadiusScaled,
+          dist: _resizeHandleHitRadiusScaled - (index / 1000),
         ));
       }
     }
@@ -319,7 +345,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   }
 
   // --- Gestos ---
-  void _onTapDown(TapDownDetails d) async {
+  void _onTapUp(TapUpDetails d) async {
     if (!widget.isInteractive) return;
     final pos = d.localPosition;
     if (_isInsideControl(
@@ -356,6 +382,23 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     }
     final hit = _hitTest(pos);
 
+    if (_interactionMode == BBoxInteractionMode.selectBeforeEdit) {
+      final selectedHit = hit != null && hit.id == _selected ? hit : null;
+      if (selectedHit == null) {
+        if (!widget.controller.canCreateBoxes) {
+          _cancelEdit();
+          return;
+        }
+        _mode = Mode.draw;
+        _activeHandle = Handle.none;
+        _selected = null;
+        _drawStart = pos;
+        _live = BBoxEntity(center: pos, w: 1, h: 1);
+        setState(() {});
+        return;
+      }
+    }
+
     if (hit != null) {
       // selecciona y trae al frente
       final idx = _boxes.indexWhere((b) => b.id == hit.id);
@@ -372,6 +415,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
             angle: box.angle,
             color: box.color,
             tag: box.tag,
+            showTag: box.showTag,
           );
         });
       }
@@ -398,6 +442,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: b.angle,
           color: b.color,
           tag: b.tag,
+          showTag: b.showTag,
         );
         setState(() {});
         return;
@@ -442,12 +487,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: 0,
           color: Color(0xff0f52ff),
           tag: live.tag,
+          showTag: live.showTag,
         );
-        _live = _resolveCandidateBox(
-          candidate,
-          live,
-          allowRecenter: true,
-        );
+        _live = _resolveCandidateBox(candidate, live, allowRecenter: true);
         break;
 
       case Mode.drag:
@@ -466,12 +508,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: live.angle,
           color: b.color,
           tag: b.tag,
+          showTag: b.showTag,
         );
-        _live = _resolveCandidateBox(
-          candidate,
-          live,
-          allowRecenter: true,
-        );
+        _live = _resolveCandidateBox(candidate, live, allowRecenter: true);
         break;
 
       case Mode.rotate:
@@ -488,12 +527,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           angle: ang,
           color: b.color,
           tag: b.tag,
+          showTag: b.showTag,
         );
-        _live = _resolveCandidateBox(
-          candidate,
-          live,
-          allowRecenter: true,
-        );
+        _live = _resolveCandidateBox(candidate, live, allowRecenter: true);
         break;
 
       case Mode.resize:
@@ -506,11 +542,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
           widget.minW,
           widget.minH,
         );
-        _live = _resolveCandidateBox(
-          candidate,
-          live,
-          allowRecenter: false,
-        );
+        _live = _resolveCandidateBox(candidate, live, allowRecenter: false);
         break;
 
       case Mode.idle:
@@ -664,6 +696,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       angle: base.angle,
       color: cur.color,
       tag: cur.tag,
+      showTag: cur.showTag,
     );
   }
 
@@ -719,6 +752,68 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
     );
   }
 
+  double get _estimatedTagHeight =>
+      _tagFontSizeScaled + (_tagVerticalPaddingScaled * 2);
+
+  double _estimatedTagWidth(String text) {
+    final estimatedTextWidth = text.length * _tagFontSizeScaled * 0.62;
+    return estimatedTextWidth + (_tagHorizontalPaddingScaled * 2);
+  }
+
+  List<Widget> _buildTagPills(BuildContext context) {
+    final theme = Theme.of(context);
+    final backgroundColor = theme.colorScheme.outline.withOpacity(0.5);
+    const textColor = Colors.white;
+
+    return _boxes
+        .map((box) {
+          final tag = box.tag?.trim();
+          if (!box.showTag || tag == null || tag.isEmpty) {
+            return const SizedBox.shrink();
+          }
+
+          final bounds = box.axisAlignedBounds;
+          final width = _estimatedTagWidth(tag);
+          final height = _estimatedTagHeight;
+          final left = bounds.left
+              .clamp(4.0, math.max(4.0, widget.viewSize.width - width - 4))
+              .toDouble();
+          final top = (bounds.top - height - _tagYOffsetScaled)
+              .clamp(4.0, math.max(4.0, widget.viewSize.height - height - 4))
+              .toDouble();
+
+          return Positioned(
+            left: left,
+            top: top,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: backgroundColor,
+                  borderRadius: BorderRadius.circular(_tagCornerRadiusScaled),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: _tagHorizontalPaddingScaled,
+                    vertical: _tagVerticalPaddingScaled,
+                  ),
+                  child: Text(
+                    tag,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: textColor,
+                      fontSize: _tagFontSizeScaled,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        })
+        .toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final sel = _selectedBox;
@@ -730,7 +825,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       behavior: HitTestBehavior.opaque,
       onPanStart: _onPanStart,
       onPanUpdate: _onPanUpdate,
-      onTapDown: _onTapDown,
+      onTapUp: _onTapUp,
       onPanEnd: (_) => _onPanEnd(),
       child: Stack(
         fit: StackFit.expand,
@@ -752,6 +847,8 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
               liveStrokeWidth: _liveStrokeWidthScaled,
             ),
           ),
+
+          ..._buildTagPills(context),
 
           if (sel != null &&
               widget.controlsConfig.showRotateControl &&

@@ -160,6 +160,7 @@ class BBoxEntity {
   final BBoxViewGeometry view;
   final BBoxFrameGeometry frame;
   String? tag;
+  bool showTag;
   Color color;
 
   BBoxEntity({
@@ -170,6 +171,7 @@ class BBoxEntity {
     double angle = 0,
     this.color = const Color(0xff0f52ff),
     this.tag,
+    this.showTag = true,
     BBoxFrameGeometry? frame,
   }) : id = id ?? DateTime.now().microsecondsSinceEpoch,
        view = BBoxViewGeometry(
@@ -336,6 +338,7 @@ extension BBoxCopy on BBoxEntity {
     double? angleDegScreen,
     Rect? sourceCropRect,
     String? tag,
+    bool? showTag,
   }) {
     final nextFrame = BBoxFrameGeometry(
       absoluteX: frame.absoluteX,
@@ -359,6 +362,7 @@ extension BBoxCopy on BBoxEntity {
       angle: angle ?? this.angle,
       color: color ?? this.color,
       tag: tag ?? this.tag,
+      showTag: showTag ?? this.showTag,
       frame: nextFrame,
     );
   }
@@ -401,9 +405,11 @@ extension BBoxCanvasBounds on BBoxEntity {
 
     return copyWith(
       center: Offset(
-        center.dx.clamp(extents.halfWidth, viewSize.width - extents.halfWidth)
+        center.dx
+            .clamp(extents.halfWidth, viewSize.width - extents.halfWidth)
             .toDouble(),
-        center.dy.clamp(extents.halfHeight, viewSize.height - extents.halfHeight)
+        center.dy
+            .clamp(extents.halfHeight, viewSize.height - extents.halfHeight)
             .toDouble(),
       ),
     );

@@ -22,6 +22,7 @@ class BBoxEntityParser {
       angleDegrees: angleDegrees,
       color: _readColor(json),
       tag: _readTag(json['tag']),
+      showTag: _readShowTag(json),
       mapper: mapper,
     );
   }
@@ -56,6 +57,7 @@ class BBoxEntityParser {
       angleDegrees: angleDegrees,
       color: _readColor(json),
       tag: _readTag(json['tag']),
+      showTag: _readShowTag(json),
       mapper: mapper,
     );
   }
@@ -69,6 +71,7 @@ class BBoxEntityParser {
     required double angleDegrees,
     required Color color,
     required String? tag,
+    required bool showTag,
     required FitCoverMapper mapper,
   }) {
     final frame = BBoxFrameGeometry(angleDegrees: angleDegrees);
@@ -88,6 +91,7 @@ class BBoxEntityParser {
       angle: angleRadians,
       color: color,
       tag: tag,
+      showTag: showTag,
       frame: frame,
     );
   }
@@ -110,6 +114,14 @@ class BBoxEntityParser {
 
   static String? _readTag(dynamic raw) => raw == null ? null : raw.toString();
 
+  static bool _readShowTag(Map<String, dynamic> json) {
+    final raw = json['show_tag'] ?? json['showTag'];
+    if (raw == null) return true;
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    return raw.toString().toLowerCase() != 'false';
+  }
+
   static double _readAngleDegrees(Map<String, dynamic> json) {
     final raw = json['angle_deg'] ?? json['angle_deg_cv'] ?? 0;
     return raw is num ? raw.toDouble() : double.tryParse('$raw') ?? 0.0;
@@ -120,7 +132,9 @@ class BBoxEntityParser {
       return BBoxEntity._colorFromHex(json['color_hex'] as String);
     }
     if (json['color_bgr'] is List) {
-      return BBoxEntity._colorFromBgr(List<int>.from(json['color_bgr'] as List));
+      return BBoxEntity._colorFromBgr(
+        List<int>.from(json['color_bgr'] as List),
+      );
     }
     return const Color(0xFF0F52FF);
   }

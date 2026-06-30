@@ -75,6 +75,22 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<void> dragFromTo(WidgetTester tester, Offset start, Offset end) async {
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.touch);
+    final mid = Offset(
+      start.dx + ((end.dx - start.dx) / 2),
+      start.dy + ((end.dy - start.dy) / 2),
+    );
+    await gesture.down(start);
+    await tester.pump();
+    await gesture.moveTo(mid);
+    await tester.pump();
+    await gesture.moveTo(end);
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('controller defaults to auto tool', (tester) async {
     final controller = BBoxEditorController();
     addTearDown(controller.dispose);
@@ -148,6 +164,7 @@ void main() {
 
       expect(box.id, 9);
       expect(box.tag, 'person');
+      expect(box.showTag, isTrue);
       expect(box.center.dx, closeTo(320, 0.001));
       expect(box.center.dy, closeTo(180, 0.001));
       expect(box.w, closeTo(100, 0.001));
@@ -238,6 +255,33 @@ void main() {
 
     expect(frame, isNotNull);
     expect(frame!.bytes, isNotEmpty);
+  });
+
+  testWidgets('overlay shows and hides bbox tag pills per entity', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+
+    final box = BBoxEntity(
+      id: 77,
+      center: const Offset(320, 180),
+      w: 140,
+      h: 80,
+      tag: 'person',
+      showTag: true,
+    );
+
+    await controller.addBox(box);
+    await tester.pumpAndSettle();
+    expect(find.text('person'), findsOneWidget);
+
+    await controller.updateBox(box.id, box.copyWith(showTag: false));
+    await tester.pumpAndSettle();
+    expect(find.text('person'), findsNothing);
   });
 
   testWidgets('drawing beyond editor edges still commits bbox inside canvas', (
@@ -414,6 +458,92 @@ void main() {
       canResumePreview: true,
     );
     expect(controllerNotifications, 3);
+  });
+
+  testWidgets('select-before-edit mode creates bbox over an unselected box', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      buildHarnessWithPolicy(
+        controller,
+        ToolPolicy.enforced,
+        controlsConfig: const BBoxEditorControlsConfig(
+          interactionMode: BBoxInteractionMode.selectBeforeEdit,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final original = BBoxEntity(
+      id: 1,
+      center: const Offset(320, 180),
+      w: 160,
+      h: 90,
+      tag: 'base',
+    );
+    await controller.addBox(original);
+    await controller.setSelectedBox(null);
+    await tester.pumpAndSettle();
+
+    await dragFromTo(
+      tester,
+      editorGlobalPoint(tester, original.center),
+      editorGlobalPoint(tester, original.center + const Offset(90, 60)),
+    );
+
+    expect(controller.boxes.value, hasLength(2));
+    final base = controller.boxes.value.firstWhere((box) => box.id == 1);
+    expect(base.center, original.center);
+    expect(base.w, original.w);
+    expect(base.h, original.h);
+  });
+
+  testWidgets('select-before-edit mode drags only after selecting a box', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      buildHarnessWithPolicy(
+        controller,
+        ToolPolicy.enforced,
+        controlsConfig: const BBoxEditorControlsConfig(
+          interactionMode: BBoxInteractionMode.selectBeforeEdit,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final original = BBoxEntity(
+      id: 2,
+      center: const Offset(320, 180),
+      w: 160,
+      h: 90,
+      tag: 'movable',
+    );
+    await controller.addBox(original);
+    await controller.setSelectedBox(null);
+    await tester.pumpAndSettle();
+
+    await tester.tapAt(editorGlobalPoint(tester, original.center));
+    await tester.pumpAndSettle();
+    expect(controller.selectedBox?.id, original.id);
+
+    await dragFromTo(
+      tester,
+      editorGlobalPoint(tester, original.center),
+      editorGlobalPoint(tester, original.center + const Offset(70, 20)),
+    );
+
+    expect(controller.boxes.value, hasLength(1));
+    final moved = controller.boxes.value.single;
+    expect(moved.id, original.id);
+    expect(moved.center.dx, greaterThan(original.center.dx));
+    expect(moved.center.dy, greaterThan(original.center.dy));
   });
 
   testWidgets('controller max box count blocks creations beyond limit', (

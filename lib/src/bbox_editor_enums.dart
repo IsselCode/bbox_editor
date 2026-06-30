@@ -6,6 +6,8 @@ enum BBoxTool { auto, zoom, bboxs }
 
 enum ToolPolicy { platformDefault, enforced }
 
+enum BBoxInteractionMode { directEdit, selectBeforeEdit }
+
 enum CommitOrigin { controller, overlay }
 
 enum BBoxCameraMode { captureStill, livePreview }
