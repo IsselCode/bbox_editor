@@ -416,13 +416,18 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   void _handleCameraImage(CameraImage image) {
     final request = _pendingFrameRequest;
-    if (request == null || request.completed || _encodingFrame || _disposed) {
+    final continuous = widget.onLiveFrame != null;
+    if ((!continuous && (request == null || request.completed)) ||
+        _encodingFrame ||
+        _disposed) {
       return;
     }
-    if (request.generation != _cameraGeneration) return;
+    if (request != null && request.generation != _cameraGeneration) return;
 
-    _pendingFrameRequest = null;
-    _activeFrameRequest = request;
+    if (request != null) {
+      _pendingFrameRequest = null;
+      _activeFrameRequest = request;
+    }
     _encodingFrame = true;
     final acquisitionStart = Stopwatch()..start();
     final raw = _copyCameraImage(image, acquisitionStart);
@@ -432,7 +437,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   Future<void> _encodeAndComplete(
     BBoxRawLiveFrame raw,
-    _LiveFrameRequest request,
+    _LiveFrameRequest? request,
     int generation,
   ) async {
     try {
@@ -440,8 +445,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       if (!mounted ||
           _disposed ||
           generation != _cameraGeneration ||
-          request.completed) {
-        return;
+          (request?.completed ?? false)) {
+      return;
       }
       final frame = BBoxFrameData(
         bytes: encoded.bytes,
@@ -456,14 +461,18 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       _lastLiveFrame = frame;
       widget.controller.updateCurrentSourceFrame(frame);
       widget.onLiveFrame?.call(frame);
-      if (!request.completer.isCompleted) request.completer.complete(frame);
+      if (request != null && !request.completer.isCompleted) {
+        request.completer.complete(frame);
+      }
     } catch (error, stackTrace) {
-      if (!request.completer.isCompleted && !request.completed) {
+      if (request != null &&
+          !request.completer.isCompleted &&
+          !request.completed) {
         request.completer.completeError(error, stackTrace);
       }
     } finally {
-      request.timer?.cancel();
-      if (identical(_activeFrameRequest, request)) {
+      request?.timer?.cancel();
+      if (request != null && identical(_activeFrameRequest, request)) {
         _activeFrameRequest = null;
       }
       _encodingFrame = false;
