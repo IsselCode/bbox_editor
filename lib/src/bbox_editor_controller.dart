@@ -96,6 +96,8 @@ class BBoxEditorController extends ChangeNotifier {
   Object? _sourceFrameOwner;
   Future<BBoxFrameData?> Function()? _getCurrentSourceFrame;
   Future<BBoxFrameData?> Function()? _getCapturedSourceFrame;
+  Object? _nextFrameOwner;
+  Future<BBoxFrameData?> Function(Duration timeout)? _requestNextFrame;
 
   void attachOverlay({
     required VoidCallback clearAll,
@@ -169,6 +171,20 @@ class BBoxEditorController extends ChangeNotifier {
     _sourceFrameOwner = null;
     _getCurrentSourceFrame = null;
     _getCapturedSourceFrame = null;
+  }
+
+  void attachNextFrameRequest({
+    required Object owner,
+    required Future<BBoxFrameData?> Function(Duration timeout) request,
+  }) {
+    _nextFrameOwner = owner;
+    _requestNextFrame = request;
+  }
+
+  void detachNextFrameRequest(Object owner) {
+    if (!identical(_nextFrameOwner, owner)) return;
+    _nextFrameOwner = null;
+    _requestNextFrame = null;
   }
 
   void updateCameraState({
@@ -295,6 +311,18 @@ class BBoxEditorController extends ChangeNotifier {
       return fromProvider;
     }
     return currentSourceFrame.value;
+  }
+
+  /// Requests a fresh frame from a live source when that source supports it.
+  ///
+  /// Image and MJPEG sources retain their existing cached-frame semantics until
+  /// they provide a dedicated request implementation.
+  Future<BBoxFrameData?> requestNextFrame({
+    Duration timeout = const Duration(seconds: 2),
+  }) async {
+    final requester = _requestNextFrame;
+    if (requester != null) return requester(timeout);
+    return getCurrentSourceFrame();
   }
 
   Future<BBoxFrameData?> getCapturedSourceFrame() async {

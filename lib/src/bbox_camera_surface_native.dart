@@ -1,14 +1,16 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'bbox_camera_config.dart';
 import 'bbox_editor_controller.dart';
 import 'bbox_editor_enums.dart';
 import 'bbox_frame_data.dart';
+import 'bbox_live_frame_encoder.dart';
 
 class BBoxCameraSurface extends StatefulWidget {
   const BBoxCameraSurface({
@@ -44,6 +46,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   Size? _capturedSize;
   Object? _error;
   bool _initializing = true;
+  bool _imageStreamStarted = false;
+  bool _encodingFrame = false;
+  bool _disposed = false;
+  bool _captureInProgress = false;
+  int _cameraGeneration = 0;
+  _LiveFrameRequest? _pendingFrameRequest;
+  _LiveFrameRequest? _activeFrameRequest;
+  BBoxFrameData? _lastLiveFrame;
 
   bool get _isCaptureMode => widget.config.mode == BBoxCameraMode.captureStill;
 
@@ -61,6 +71,12 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       getCurrentFrame: _getCurrentFrameFromController,
       getCapturedFrame: _getCapturedFrameFromController,
     );
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      widget.controller.attachNextFrameRequest(
+        owner: _cameraBindingOwner,
+        request: _requestNextFrame,
+      );
+    }
     _initializeCamera();
   }
 
@@ -80,6 +96,12 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         getCurrentFrame: _getCurrentFrameFromController,
         getCapturedFrame: _getCapturedFrameFromController,
       );
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        widget.controller.attachNextFrameRequest(
+          owner: _cameraBindingOwner,
+          request: _requestNextFrame,
+        );
+      }
     }
     if (oldWidget.config == widget.config) return;
 
@@ -96,18 +118,21 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) return;
-
-    if (state == AppLifecycleState.inactive) {
-      controller.dispose();
-      _cameraController = null;
-    } else if (state == AppLifecycleState.resumed) {
+    if (_disposed) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      unawaited(_suspendCamera());
+    } else if (state == AppLifecycleState.resumed &&
+        _cameraController == null &&
+        !_initializing) {
       _initializeCamera();
     }
   }
 
   Future<void> _reinitializeCamera() async {
+    _cancelFrameRequests();
     await _disposeController();
     if (mounted) {
       setState(() {
@@ -129,6 +154,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   }
 
   Future<void> _initializeCamera() async {
+    final generation = ++_cameraGeneration;
+    CameraController? initializedController;
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -149,13 +176,22 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         description,
         _mapResolutionPreset(widget.config.resolutionPreset),
         enableAudio: widget.config.enableAudio,
+        imageFormatGroup: defaultTargetPlatform == TargetPlatform.android
+            ? ImageFormatGroup.nv21
+            : null,
       );
+      initializedController = controller;
 
       await controller.initialize();
 
-      if (!mounted) {
+      if (!mounted || _disposed || generation != _cameraGeneration) {
         await controller.dispose();
         return;
+      }
+
+      if (defaultTargetPlatform == TargetPlatform.android && !_isCaptureMode) {
+        await controller.startImageStream(_handleCameraImage);
+        _imageStreamStarted = true;
       }
 
       setState(() {
@@ -182,6 +218,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         widget.onEditableFrameChanged(true);
       }
     } catch (error) {
+      await initializedController?.dispose();
       if (!mounted) return;
       setState(() {
         _error = error;
@@ -201,9 +238,17 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   Future<void> _capturePhoto() async {
     final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) return;
+    if (_captureInProgress ||
+        controller == null ||
+        !controller.value.isInitialized) {
+      return;
+    }
+    _captureInProgress = true;
+    final restartStream = _imageStreamStarted && !_isCaptureMode;
+    _cancelFrameRequests();
 
     try {
+      if (restartStream) await _stopImageStream();
       final file = await controller.takePicture();
       final bytes = await file.readAsBytes();
       final size = await _decodeImageSize(bytes);
@@ -242,6 +287,20 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       );
       widget.onEditableFrameChanged(false);
       widget.onError(error);
+    } finally {
+      try {
+        if (restartStream &&
+            mounted &&
+            !_disposed &&
+            controller.value.isInitialized &&
+            !_imageStreamStarted) {
+          await controller.startImageStream(_handleCameraImage);
+          _imageStreamStarted = true;
+        }
+      } catch (_) {
+        _imageStreamStarted = false;
+      }
+      _captureInProgress = false;
     }
   }
 
@@ -290,6 +349,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   }
 
   Future<BBoxFrameData?> _getCurrentFrameFromController() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return _captureLiveFrameWithPicture();
+    }
+    return _lastLiveFrame;
+  }
+
+  Future<BBoxFrameData?> _captureLiveFrameWithPicture() async {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) return null;
     try {
@@ -319,6 +385,167 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       mimeType: 'image/jpeg',
       sourceType: BBoxFrameSourceType.cameraCapture,
     );
+  }
+
+  Future<BBoxFrameData?> _requestNextFrame(Duration timeout) {
+    if (defaultTargetPlatform != TargetPlatform.android ||
+        _isCaptureMode ||
+        _disposed) {
+      return Future.value(_lastLiveFrame);
+    }
+    final active = _activeFrameRequest;
+    if (active != null && !active.completed) return active.completer.future;
+    final pending = _pendingFrameRequest;
+    if (pending != null && !pending.completed) return pending.completer.future;
+
+    final request = _LiveFrameRequest(
+      generation: _cameraGeneration,
+      timeout: timeout,
+    );
+    _pendingFrameRequest = request;
+    request.timer = Timer(request.timeout, () {
+      if (request.completed) return;
+      request.completed = true;
+      if (identical(_pendingFrameRequest, request)) {
+        _pendingFrameRequest = null;
+      }
+      if (!request.completer.isCompleted) request.completer.complete(null);
+    });
+    return request.completer.future;
+  }
+
+  void _handleCameraImage(CameraImage image) {
+    final request = _pendingFrameRequest;
+    if (request == null || request.completed || _encodingFrame || _disposed) {
+      return;
+    }
+    if (request.generation != _cameraGeneration) return;
+
+    _pendingFrameRequest = null;
+    _activeFrameRequest = request;
+    _encodingFrame = true;
+    final raw = _copyCameraImage(image);
+    final generation = _cameraGeneration;
+    unawaited(_encodeAndComplete(raw, request, generation));
+  }
+
+  Future<void> _encodeAndComplete(
+    BBoxRawLiveFrame raw,
+    _LiveFrameRequest request,
+    int generation,
+  ) async {
+    try {
+      final encoded = await encodeBBoxLiveFrame(raw);
+      if (!mounted ||
+          _disposed ||
+          generation != _cameraGeneration ||
+          request.completed) {
+        return;
+      }
+      final frame = BBoxFrameData(
+        bytes: encoded.bytes,
+        sourceResolution: Size(
+          encoded.width.toDouble(),
+          encoded.height.toDouble(),
+        ),
+        timestamp: DateTime.now(),
+        mimeType: 'image/jpeg',
+        sourceType: BBoxFrameSourceType.cameraLive,
+      );
+      _lastLiveFrame = frame;
+      widget.controller.updateCurrentSourceFrame(frame);
+      widget.onLiveFrame?.call(frame);
+      widget.onFrameReady(frame.sourceResolution);
+      if (!request.completer.isCompleted) request.completer.complete(frame);
+    } catch (error, stackTrace) {
+      if (!request.completer.isCompleted && !request.completed) {
+        request.completer.completeError(error, stackTrace);
+      }
+    } finally {
+      request.timer?.cancel();
+      if (identical(_activeFrameRequest, request)) {
+        _activeFrameRequest = null;
+      }
+      _encodingFrame = false;
+    }
+  }
+
+  BBoxRawLiveFrame _copyCameraImage(CameraImage image) {
+    final rotation = _rotationFor(_cameraController);
+    final mirror =
+        _cameraController?.description.lensDirection ==
+        CameraLensDirection.front;
+    return BBoxRawLiveFrame(
+      width: image.width,
+      height: image.height,
+      planes: image.planes
+          .map((plane) => Uint8List.fromList(plane.bytes))
+          .toList(growable: false),
+      rowStrides: image.planes
+          .map((plane) => plane.bytesPerRow)
+          .toList(growable: false),
+      pixelStrides: image.planes
+          .map((plane) => plane.bytesPerPixel ?? 1)
+          .toList(growable: false),
+      rotation: rotation,
+      mirror: mirror,
+      quality: widget.config.liveFrameJpegQuality,
+      targetWidth: widget.config.liveFrameTargetResolution?.width.round(),
+      targetHeight: widget.config.liveFrameTargetResolution?.height.round(),
+    );
+  }
+
+  int _rotationFor(CameraController? controller) {
+    if (controller == null) return 0;
+    final orientation = switch (controller.value.deviceOrientation) {
+      DeviceOrientation.portraitUp => 0,
+      DeviceOrientation.landscapeRight => 90,
+      DeviceOrientation.portraitDown => 180,
+      DeviceOrientation.landscapeLeft => 270,
+    };
+    final sensor = controller.description.sensorOrientation;
+    final isFront =
+        controller.description.lensDirection == CameraLensDirection.front;
+    return isFront
+        ? (sensor + orientation) % 360
+        : (sensor - orientation + 360) % 360;
+  }
+
+  Future<void> _stopImageStream() async {
+    final controller = _cameraController;
+    if (!_imageStreamStarted || controller == null) return;
+    _imageStreamStarted = false;
+    try {
+      if (controller.value.isInitialized &&
+          controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // Stopping is intentionally idempotent across lifecycle transitions.
+    }
+  }
+
+  Future<void> _suspendCamera() async {
+    _cameraGeneration++;
+    _cancelFrameRequests();
+    await _stopImageStream();
+    final controller = _cameraController;
+    _cameraController = null;
+    await controller?.dispose();
+  }
+
+  void _cancelFrameRequests() {
+    for (final request in <_LiveFrameRequest?>[
+      _pendingFrameRequest,
+      _activeFrameRequest,
+    ]) {
+      if (request == null) continue;
+      request.timer?.cancel();
+      request.completed = true;
+      if (!request.completer.isCompleted) request.completer.complete(null);
+    }
+    _pendingFrameRequest = null;
+    if (!_encodingFrame) _activeFrameRequest = null;
   }
 
   bool _requiresCameraReinitialize(
@@ -459,6 +686,9 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   }
 
   Future<void> _disposeController() async {
+    _cameraGeneration++;
+    _cancelFrameRequests();
+    await _stopImageStream();
     final controller = _cameraController;
     _cameraController = null;
     await controller?.dispose();
@@ -466,10 +696,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   @override
   void dispose() {
+    _disposed = true;
+    _cancelFrameRequests();
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.detachCamera(_cameraBindingOwner);
     widget.controller.detachSourceFrameAccess(_cameraBindingOwner);
-    _disposeController();
+    widget.controller.detachNextFrameRequest(_cameraBindingOwner);
+    unawaited(_disposeController());
     super.dispose();
   }
 
@@ -531,4 +764,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       ],
     );
   }
+}
+
+class _LiveFrameRequest {
+  _LiveFrameRequest({required this.generation, required this.timeout});
+
+  final int generation;
+  final Duration timeout;
+  final Completer<BBoxFrameData?> completer = Completer<BBoxFrameData?>();
+  Timer? timer;
+  bool completed = false;
 }
