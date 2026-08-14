@@ -190,6 +190,10 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         if (focusPoint != null) {
           await controller.setFocusPoint(focusPoint);
         }
+      } else if (widget.config.focusPoint != null) {
+        // Set the autofocus region once during initialization so capture does
+        // not trigger a new focus cycle for every photo.
+        await controller.setFocusPoint(widget.config.focusPoint);
       }
 
       if (!mounted || _disposed || generation != _cameraGeneration) {
