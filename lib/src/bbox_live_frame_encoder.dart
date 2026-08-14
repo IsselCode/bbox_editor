@@ -3,6 +3,8 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 /// Owned copy of the planes received from [CameraImage].
 ///
@@ -56,7 +58,49 @@ class BBoxEncodedLiveFrame {
 
 /// Encodes a copied camera frame without doing conversion on the UI isolate.
 Future<BBoxEncodedLiveFrame> encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    return _encodeBBoxLiveFrameNative(frame);
+  }
   return Isolate.run(() => _encodeBBoxLiveFrame(frame));
+}
+
+Future<BBoxEncodedLiveFrame> _encodeBBoxLiveFrameNative(BBoxRawLiveFrame frame) async {
+  final conversionStart = Stopwatch()..start();
+  if (frame.width <= 0 || frame.height <= 0 || frame.planes.isEmpty) {
+    throw StateError('El frame de cámara no tiene planos YUV válidos');
+  }
+  Map<Object?, Object?>? result;
+  try {
+    result = await const MethodChannel('bbox_editor/native_encoder').invokeMethod<Map<Object?, Object?>>(
+    'encodeYuv',
+    <String, Object?>{
+      'width': frame.width, 'height': frame.height, 'y': frame.planes[0],
+      'u': frame.planes.length >= 3 ? frame.planes[1] : Uint8List(0),
+      'v': frame.planes.length >= 3 ? frame.planes[2] : Uint8List(0),
+      'singlePlane': frame.planes.length < 3,
+      'yStride': frame.rowStrides[0],
+      'uStride': frame.planes.length >= 3 ? frame.rowStrides[1] : frame.rowStrides[0],
+      'vStride': frame.planes.length >= 3 ? frame.rowStrides[2] : frame.rowStrides[0],
+      'uPixel': frame.planes.length >= 3 ? frame.pixelStrides[1] : 2,
+      'vPixel': frame.planes.length >= 3 ? frame.pixelStrides[2] : 2,
+      'rotation': frame.rotation, 'mirror': frame.mirror, 'quality': frame.quality,
+      'targetWidth': frame.targetWidth, 'targetHeight': frame.targetHeight,
+    },
+    );
+  } on MissingPluginException {
+    return Isolate.run(() => _encodeBBoxLiveFrame(frame));
+  } on FlutterError {
+    // Allows pure Dart tests and older host applications to keep working.
+    return Isolate.run(() => _encodeBBoxLiveFrame(frame));
+  }
+  if (result == null || result['bytes'] is! Uint8List) throw StateError('Android no devolvió un JPEG válido');
+  conversionStart.stop();
+  return BBoxEncodedLiveFrame(
+    bytes: result['bytes']! as Uint8List,
+    width: (result['width']! as num).toInt(), height: (result['height']! as num).toInt(),
+    conversionDuration: conversionStart.elapsed, encodingDuration: Duration.zero,
+    acquisitionDuration: frame.acquisitionDuration,
+  );
 }
 
 BBoxEncodedLiveFrame _encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
