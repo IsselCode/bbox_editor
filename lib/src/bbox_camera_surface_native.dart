@@ -504,11 +504,11 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     if (controller == null) return 0;
     final orientation = switch (controller.value.deviceOrientation) {
       DeviceOrientation.portraitUp => 0,
-      // CameraImage is delivered in sensor coordinates.  These values use
-      // the same clockwise convention as CameraPreview/captureStill.
-      DeviceOrientation.landscapeRight => 90,
+      // camera_android_camerax reports the landscape orientations using this
+      // convention for ImageAnalysis/CameraImage.
+      DeviceOrientation.landscapeLeft => 90,
       DeviceOrientation.portraitDown => 180,
-      DeviceOrientation.landscapeLeft => 270,
+      DeviceOrientation.landscapeRight => 270,
     };
     final sensor = controller.description.sensorOrientation;
     final isFront =
