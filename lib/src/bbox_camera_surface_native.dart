@@ -424,7 +424,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     _pendingFrameRequest = null;
     _activeFrameRequest = request;
     _encodingFrame = true;
-    final raw = _copyCameraImage(image);
+    final acquisitionStart = Stopwatch()..start();
+    final raw = _copyCameraImage(image, acquisitionStart);
     final generation = _cameraGeneration;
     unawaited(_encodeAndComplete(raw, request, generation));
   }
@@ -455,7 +456,6 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       _lastLiveFrame = frame;
       widget.controller.updateCurrentSourceFrame(frame);
       widget.onLiveFrame?.call(frame);
-      widget.onFrameReady(frame.sourceResolution);
       if (!request.completer.isCompleted) request.completer.complete(frame);
     } catch (error, stackTrace) {
       if (!request.completer.isCompleted && !request.completed) {
@@ -470,7 +470,11 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     }
   }
 
-  BBoxRawLiveFrame _copyCameraImage(CameraImage image) {
+  BBoxRawLiveFrame _copyCameraImage(
+    CameraImage image,
+    Stopwatch acquisitionStopwatch,
+  ) {
+    acquisitionStopwatch.stop();
     final rotation = _rotationFor(_cameraController);
     final mirror =
         _cameraController?.description.lensDirection ==
@@ -490,6 +494,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       rotation: rotation,
       mirror: mirror,
       quality: widget.config.liveFrameJpegQuality,
+      acquisitionDuration: acquisitionStopwatch.elapsed,
       targetWidth: widget.config.liveFrameTargetResolution?.width.round(),
       targetHeight: widget.config.liveFrameTargetResolution?.height.round(),
     );
@@ -499,6 +504,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     if (controller == null) return 0;
     final orientation = switch (controller.value.deviceOrientation) {
       DeviceOrientation.portraitUp => 0,
+      // CameraImage is delivered in sensor coordinates.  These values use
+      // the same clockwise convention as CameraPreview/captureStill.
       DeviceOrientation.landscapeRight => 90,
       DeviceOrientation.portraitDown => 180,
       DeviceOrientation.landscapeLeft => 270,

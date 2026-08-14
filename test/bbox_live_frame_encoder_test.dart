@@ -18,6 +18,7 @@ void main() {
         rotation: 0,
         mirror: false,
         quality: 85,
+        acquisitionDuration: Duration.zero,
       ),
     );
 
@@ -44,6 +45,7 @@ void main() {
         rotation: 90,
         mirror: false,
         quality: 85,
+        acquisitionDuration: Duration.zero,
       ),
     );
 

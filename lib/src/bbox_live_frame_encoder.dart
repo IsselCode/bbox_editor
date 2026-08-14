@@ -18,6 +18,7 @@ class BBoxRawLiveFrame {
     required this.rotation,
     required this.mirror,
     required this.quality,
+    required this.acquisitionDuration,
     this.targetWidth,
     this.targetHeight,
   });
@@ -30,6 +31,7 @@ class BBoxRawLiveFrame {
   final int rotation;
   final bool mirror;
   final int quality;
+  final Duration acquisitionDuration;
   final int? targetWidth;
   final int? targetHeight;
 }
@@ -39,11 +41,17 @@ class BBoxEncodedLiveFrame {
     required this.bytes,
     required this.width,
     required this.height,
+    required this.conversionDuration,
+    required this.encodingDuration,
+    required this.acquisitionDuration,
   });
 
   final Uint8List bytes;
   final int width;
   final int height;
+  final Duration conversionDuration;
+  final Duration encodingDuration;
+  final Duration acquisitionDuration;
 }
 
 /// Encodes a copied camera frame without doing conversion on the UI isolate.
@@ -52,6 +60,7 @@ Future<BBoxEncodedLiveFrame> encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
 }
 
 BBoxEncodedLiveFrame _encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
+  final conversionStart = Stopwatch()..start();
   if (frame.width <= 0 || frame.height <= 0 || frame.planes.isEmpty) {
     throw StateError(
       'El frame de cámara no tiene dimensiones o planos válidos',
@@ -114,6 +123,7 @@ BBoxEncodedLiveFrame _encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
     numChannels: 3,
     order: img.ChannelOrder.rgb,
   );
+  conversionStart.stop();
   final rotation = ((frame.rotation % 360) + 360) % 360;
   if (rotation != 0) {
     image = img.copyRotate(image, angle: rotation);
@@ -134,11 +144,16 @@ BBoxEncodedLiveFrame _encodeBBoxLiveFrame(BBoxRawLiveFrame frame) {
     }
     image = img.copyResize(image, width: targetWidth, height: targetHeight);
   }
+  final encodingStart = Stopwatch()..start();
   final bytes = img.encodeJpg(image, quality: frame.quality.clamp(1, 100));
+  encodingStart.stop();
   return BBoxEncodedLiveFrame(
     bytes: Uint8List.fromList(bytes),
     width: image.width,
     height: image.height,
+    conversionDuration: conversionStart.elapsed,
+    encodingDuration: encodingStart.elapsed,
+    acquisitionDuration: frame.acquisitionDuration,
   );
 }
 
