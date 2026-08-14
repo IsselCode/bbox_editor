@@ -15,3 +15,5 @@ enum BBoxCameraMode { captureStill, livePreview }
 enum BBoxCameraLensDirection { front, back, external }
 
 enum BBoxCameraResolutionPreset { low, medium, high, veryHigh, ultraHigh, max }
+
+enum BBoxCameraFocusMode { auto, locked }

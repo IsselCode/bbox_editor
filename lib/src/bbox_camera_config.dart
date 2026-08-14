@@ -10,6 +10,8 @@ class BBoxCameraConfig {
     this.mode = BBoxCameraMode.livePreview,
     this.lensDirection = BBoxCameraLensDirection.back,
     this.resolutionPreset = BBoxCameraResolutionPreset.high,
+    this.focusMode = BBoxCameraFocusMode.auto,
+    this.focusPoint,
     this.enableAudio = false,
     this.liveFrameTargetResolution,
     this.liveFrameJpegQuality = 85,
@@ -18,6 +20,8 @@ class BBoxCameraConfig {
   final BBoxCameraMode mode;
   final BBoxCameraLensDirection lensDirection;
   final BBoxCameraResolutionPreset resolutionPreset;
+  final BBoxCameraFocusMode focusMode;
+  final Offset? focusPoint;
   final bool enableAudio;
   final Size? liveFrameTargetResolution;
   final int liveFrameJpegQuality;
@@ -29,6 +33,8 @@ class BBoxCameraConfig {
         other.mode == mode &&
         other.lensDirection == lensDirection &&
         other.resolutionPreset == resolutionPreset &&
+        other.focusMode == focusMode &&
+        other.focusPoint == focusPoint &&
         other.enableAudio == enableAudio &&
         other.liveFrameTargetResolution == liveFrameTargetResolution &&
         other.liveFrameJpegQuality == liveFrameJpegQuality;
@@ -39,6 +45,8 @@ class BBoxCameraConfig {
     mode,
     lensDirection,
     resolutionPreset,
+    focusMode,
+    focusPoint,
     enableAudio,
     liveFrameTargetResolution,
     liveFrameJpegQuality,

@@ -184,6 +184,14 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
       await controller.initialize();
 
+      if (widget.config.focusMode == BBoxCameraFocusMode.locked) {
+        await controller.setFocusMode(FocusMode.locked);
+        final focusPoint = widget.config.focusPoint;
+        if (focusPoint != null) {
+          await controller.setFocusPoint(focusPoint);
+        }
+      }
+
       if (!mounted || _disposed || generation != _cameraGeneration) {
         await controller.dispose();
         return;
