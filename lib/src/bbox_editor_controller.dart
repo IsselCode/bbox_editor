@@ -55,6 +55,7 @@ class BBoxEditorController extends ChangeNotifier {
   }
 
   final ValueNotifier<List<BBoxEntity>> boxes = ValueNotifier(const []);
+  final ValueNotifier<List<PolygonEntity>> polygons = ValueNotifier(const []);
   final ValueNotifier<BBoxEntity?> selectedBoxListenable = ValueNotifier(null);
   BBoxEntity? get selectedBox => selectedBoxListenable.value;
 
@@ -78,6 +79,8 @@ class BBoxEditorController extends ChangeNotifier {
 
   final _events = StreamController<BBoxEvent>.broadcast();
   Stream<BBoxEvent> get events => _events.stream;
+  final _polygonEvents = StreamController<PolygonEvent>.broadcast();
+  Stream<PolygonEvent> get polygonEvents => _polygonEvents.stream;
 
   VoidCallback? _ovClearAll;
   void Function(int id, CommitOrigin commitOrigin)? _ovRemove;
@@ -214,11 +217,65 @@ class BBoxEditorController extends ChangeNotifier {
     _ovSetAll?.call(list);
   }
 
-  void clearAll() {
+  void clearAll({CommitOrigin commitOrigin = CommitOrigin.controller}) {
     boxes.value = const [];
     _setSelectedBox(null);
     _ovClearAll?.call();
-    _events.add(const BoxesCleared(origin: CommitOrigin.controller));
+    _events.add(BoxesCleared(origin: commitOrigin));
+  }
+
+  void setInitialPolygons(List<PolygonEntity> list) {
+    polygons.value = List.unmodifiable(list);
+  }
+
+  Future<void> addPolygon(
+    PolygonEntity polygon, {
+    CommitOrigin commitOrigin = CommitOrigin.controller,
+  }) async {
+    polygons.value = List.unmodifiable([...polygons.value, polygon]);
+    _polygonEvents.add(PolygonCreated(polygon: polygon, origin: commitOrigin));
+  }
+
+  Future<void> updatePolygon(
+    int id,
+    PolygonEntity polygon, {
+    CommitOrigin commitOrigin = CommitOrigin.controller,
+  }) async {
+    final index = polygons.value.indexWhere((element) => element.id == id);
+    if (index < 0) return;
+    if (polygon.id != id) {
+      throw ArgumentError.value(
+        polygon.id,
+        'polygon.id',
+        'The updated polygon id must match the requested id',
+      );
+    }
+    final updated = [...polygons.value]..[index] = polygon;
+    polygons.value = List.unmodifiable(updated);
+    _polygonEvents.add(PolygonUpdated(polygon: polygon, origin: commitOrigin));
+  }
+
+  Future<void> removePolygon(
+    int id, {
+    CommitOrigin commitOrigin = CommitOrigin.controller,
+  }) async {
+    final exists = polygons.value.any((element) => element.id == id);
+    if (!exists) return;
+    polygons.value = List.unmodifiable(
+      polygons.value.where((element) => element.id != id),
+    );
+    _polygonEvents.add(PolygonDeleted(id: id, origin: commitOrigin));
+  }
+
+  void clearPolygons({CommitOrigin commitOrigin = CommitOrigin.controller}) {
+    if (polygons.value.isEmpty) return;
+    polygons.value = const [];
+    _polygonEvents.add(PolygonsCleared(origin: commitOrigin));
+  }
+
+  void clearAnnotations({CommitOrigin commitOrigin = CommitOrigin.controller}) {
+    clearAll(commitOrigin: commitOrigin);
+    clearPolygons(commitOrigin: commitOrigin);
   }
 
   void captureCameraImage() {
@@ -471,10 +528,12 @@ class BBoxEditorController extends ChangeNotifier {
     maxBoxCount.dispose();
     canCreateBoxesListenable.dispose();
     boxes.dispose();
+    polygons.dispose();
     selectedBoxListenable.dispose();
     currentSourceFrame.dispose();
     capturedSourceFrame.dispose();
     _events.close();
+    _polygonEvents.close();
     super.dispose();
   }
 }

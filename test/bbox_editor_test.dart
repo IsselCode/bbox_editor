@@ -8,6 +8,10 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+// The regression exercises the runnable example exactly as a user does.
+// ignore: avoid_relative_lib_imports
+import '../example/lib/main.dart' as example_app;
+
 void main() {
   final image = MemoryImage(
     base64Decode(
@@ -110,6 +114,118 @@ void main() {
     addTearDown(controller.dispose);
 
     expect(controller.bBoxTool.value, BBoxTool.auto);
+  });
+
+  test('PolygonEntity converts coordinate pairs and validates its shape', () {
+    final polygon = PolygonEntity.fromCoordinates(const [
+      [100, 80],
+      [900, 90],
+      [890, 600],
+      [95, 590],
+    ], id: 7);
+
+    expect(polygon.id, 7);
+    expect(polygon.points.first, const Offset(100, 80));
+    expect(polygon.toCoordinates(), const [
+      [100.0, 80.0],
+      [900.0, 90.0],
+      [890.0, 600.0],
+      [95.0, 590.0],
+    ]);
+    expect(
+      () => PolygonEntity.fromCoordinates(const [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+      ]),
+      throwsArgumentError,
+    );
+  });
+
+  test(
+    'controller provides polygon CRUD and events independently of boxes',
+    () async {
+      final controller = BBoxEditorController();
+      addTearDown(controller.dispose);
+      final events = <PolygonEvent>[];
+      final subscription = controller.polygonEvents.listen(events.add);
+      addTearDown(subscription.cancel);
+
+      final polygon = PolygonEntity.fromCoordinates(const [
+        [10, 10],
+        [100, 10],
+        [100, 80],
+        [10, 80],
+      ], id: 42);
+      await controller.addPolygon(polygon);
+      await controller.updatePolygon(
+        42,
+        polygon.copyWith(color: Colors.orange),
+      );
+      await controller.removePolygon(42);
+      await controller.addPolygon(polygon);
+      controller.clearPolygons();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.boxes.value, isEmpty);
+      expect(controller.polygons.value, isEmpty);
+      expect(events, hasLength(5));
+      expect(events[0], isA<PolygonCreated>());
+      expect(events[1], isA<PolygonUpdated>());
+      expect(events[2], isA<PolygonDeleted>());
+      expect(events[4], isA<PolygonsCleared>());
+    },
+  );
+
+  testWidgets('polygon dialog remains valid throughout its closing animation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    example_app.main();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    final openButton = find.byKey(const ValueKey('open-polygon-dialog'));
+    expect(openButton, findsOneWidget);
+    await tester.ensureVisible(openButton);
+    await tester.tap(openButton);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('Crear polígono'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-polygon-dialog')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('Crear polígono'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('passive polygon and editable bbox share the overlay', (
+    tester,
+  ) async {
+    final controller = BBoxEditorController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(buildHarness(controller));
+    await tester.pumpAndSettle();
+    await controller.addPolygon(
+      PolygonEntity.fromCoordinates(const [
+        [0, 0],
+        [1280, 0],
+        [1280, 720],
+        [0, 720],
+      ]),
+    );
+    await tester.pump();
+    await drawTouchBox(tester);
+
+    expect(controller.polygons.value, hasLength(1));
+    expect(controller.boxes.value, hasLength(1));
   });
 
   testWidgets('auto mode creates a bbox with one touch drag', (tester) async {

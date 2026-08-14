@@ -92,6 +92,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
   @override
   void initState() {
     super.initState();
+    widget.controller.polygons.addListener(_handlePolygonsChanged);
     _boxes.addAll(
       widget.initialBoxes.map(
         (b) => BBoxEntity(
@@ -142,7 +143,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
       _cancelEdit();
     }
     if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.polygons.removeListener(_handlePolygonsChanged);
       oldWidget.controller.detachOverlay();
+      widget.controller.polygons.addListener(_handlePolygonsChanged);
       widget.controller.attachOverlay(
         clearAll: _clearAll,
         remove: _removeById,
@@ -175,8 +178,13 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
   @override
   void dispose() {
+    widget.controller.polygons.removeListener(_handlePolygonsChanged);
     widget.controller.detachOverlay();
     super.dispose();
+  }
+
+  void _handlePolygonsChanged() {
+    if (mounted) setState(() {});
   }
 
   // --- API interna para controller ---
@@ -913,6 +921,63 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
         .toList(growable: false);
   }
 
+  List<Widget> _buildPolygonTagPills(BuildContext context) {
+    final theme = Theme.of(context);
+    final mapper = FitCoverMapper(widget.viewSize, widget.sourceResolution);
+
+    return widget.controller.polygons.value
+        .map((polygon) {
+          final tag = polygon.tag?.trim();
+          if (!polygon.showTag || tag == null || tag.isEmpty) {
+            return const SizedBox.shrink();
+          }
+
+          final viewPoints = polygon.points.map(mapper.pFrameToView);
+          final leftEdge = viewPoints.map((point) => point.dx).reduce(math.min);
+          final topEdge = viewPoints.map((point) => point.dy).reduce(math.min);
+          final width = _estimatedTagWidth(tag);
+          final height = _estimatedTagHeight;
+          final left = leftEdge
+              .clamp(4.0, math.max(4.0, widget.viewSize.width - width - 4))
+              .toDouble();
+          final top = (topEdge - height - _tagYOffsetScaled)
+              .clamp(4.0, math.max(4.0, widget.viewSize.height - height - 4))
+              .toDouble();
+
+          return Positioned(
+            left: left,
+            top: top,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: polygon.color.withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(_tagCornerRadiusScaled),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: _tagHorizontalPaddingScaled,
+                    vertical: _tagVerticalPaddingScaled,
+                  ),
+                  child: Text(
+                    tag,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: polygon.color.computeLuminance() > 0.5
+                          ? Colors.black
+                          : Colors.white,
+                      fontSize: _tagFontSizeScaled,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        })
+        .toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final sel = _selectedBox;
@@ -946,6 +1011,12 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
               CustomPaint(
                 painter: _MultiPainter(
                   boxes: _boxes,
+                  polygons: widget.controller.polygons.value,
+                  polygonMapper: FitCoverMapper(
+                    widget.viewSize,
+                    widget.sourceResolution,
+                  ),
+                  zoomScale: _zoomScale,
                   selectedId: _selected,
                   live: _live,
                   showRotateControl: widget.controlsConfig.showRotateControl,
@@ -961,6 +1032,7 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
                 ),
               ),
 
+              ..._buildPolygonTagPills(context),
               ..._buildTagPills(context),
 
               if (sel != null &&
@@ -1005,6 +1077,9 @@ class _BBoxOverlayState extends State<BBoxOverlay> {
 
 class _MultiPainter extends CustomPainter {
   final List<BBoxEntity> boxes;
+  final List<PolygonEntity> polygons;
+  final FitCoverMapper polygonMapper;
+  final double zoomScale;
   final int? selectedId;
   final BBoxEntity? live;
   final bool showRotateControl;
@@ -1020,6 +1095,9 @@ class _MultiPainter extends CustomPainter {
 
   _MultiPainter({
     required this.boxes,
+    required this.polygons,
+    required this.polygonMapper,
+    required this.zoomScale,
     this.selectedId,
     this.live,
     required this.showRotateControl,
@@ -1036,6 +1114,29 @@ class _MultiPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    for (final polygon in polygons) {
+      final viewPoints = polygon.points
+          .map(polygonMapper.pFrameToView)
+          .toList(growable: false);
+      final path = Path()..addPolygon(viewPoints, true);
+      final fillColor = polygon.fillColor;
+      if (fillColor != null) {
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = fillColor
+            ..style = PaintingStyle.fill,
+        );
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = polygon.color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = polygon.strokeWidth / zoomScale,
+      );
+    }
+
     for (final b in boxes) {
       final path = _obbPath(b);
       final isSel = b.id == selectedId;
@@ -1108,6 +1209,10 @@ class _MultiPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _MultiPainter old) =>
       old.boxes != boxes ||
+      old.polygons != polygons ||
+      old.polygonMapper.view != polygonMapper.view ||
+      old.polygonMapper.camRes != polygonMapper.camRes ||
+      old.zoomScale != zoomScale ||
       old.selectedId != selectedId ||
       old.live != live ||
       old.showRotateControl != showRotateControl ||

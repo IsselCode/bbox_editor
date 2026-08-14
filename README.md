@@ -1,6 +1,7 @@
 # bbox_editor
 
-Flutter widget para crear, editar y consumir bounding boxes sobre tres tipos de fuente:
+Flutter widget para crear y editar bounding boxes y dibujar cuadriláteros
+pasivos sobre tres tipos de fuente:
 
 - `image`: imagen estática
 - `stream`: stream MJPEG por URL
@@ -135,6 +136,7 @@ flags de cámara son getters simples y notifican cambios a través del propio
 controller:
 
 - `boxes`
+- `polygons`
 - `selectedBox`
 - `selectedBoxListenable`
 - `creationEnabled`
@@ -187,6 +189,90 @@ BBoxEditor(
     ];
   },
 );
+```
+
+## Polígonos pasivos
+
+`PolygonEntity` representa un cuadrilátero que se dibuja en el mismo lienzo
+que los bounding boxes. Los polígonos no son seleccionables, no tienen
+controles y no participan en movimiento, resize, rotación o recorte.
+
+Sus cuatro puntos se expresan en píxeles del frame original, con este orden:
+
+```text
+topLeft -> topRight -> bottomRight -> bottomLeft
+```
+
+Puedes construirlo con objetos `Offset`:
+
+```dart
+final polygon = PolygonEntity(
+  points: const [
+    Offset(100, 80),
+    Offset(900, 90),
+    Offset(890, 600),
+    Offset(95, 590),
+  ],
+  color: Colors.green,
+  fillColor: const Color(0x2232CD32),
+  strokeWidth: 3,
+  tag: 'Zona',
+);
+
+await controller.addPolygon(polygon);
+```
+
+O directamente desde listas `[x, y]`:
+
+```dart
+final polygon = PolygonEntity.fromCoordinates(
+  const [
+    [100, 80],
+    [900, 90],
+    [890, 600],
+    [95, 590],
+  ],
+);
+```
+
+La API es paralela a la de los bbox:
+
+```dart
+controller.setInitialPolygons([polygon]);
+await controller.addPolygon(polygon);
+await controller.updatePolygon(polygon.id, polygon.copyWith(color: Colors.orange));
+await controller.removePolygon(polygon.id);
+controller.clearPolygons();
+controller.clearAnnotations(); // elimina bbox y polígonos
+```
+
+Los bbox editables y los polígonos pasivos pueden mostrarse al mismo tiempo.
+Esta funcionalidad es independiente de la fuente y funciona con `image`,
+`stream` y `camera`.
+
+La resolución usada para producir las coordenadas debe coincidir con
+`controller.sourceResolution`. El editor convierte automáticamente los puntos
+del frame a coordenadas de vista.
+
+Para escuchar sus cambios desde el widget:
+
+```dart
+BBoxEditor(
+  image: MemoryImage(bytes),
+  sourceResolution: const Size(1920, 1080),
+  controller: controller,
+  onCommitPolygon: (event) {
+    // PolygonCreated, PolygonUpdated, PolygonDeleted, PolygonsCleared
+  },
+);
+```
+
+También puedes consumirlos directamente como stream:
+
+```dart
+controller.polygonEvents.listen((event) {
+  debugPrint('$event');
+});
 ```
 
 ## Tags visibles
@@ -244,6 +330,13 @@ BBoxEditor(
 - `BoxDeleted`
 - `BoxSelected`
 - `BoxesCleared`
+
+`onCommitPolygon` emite:
+
+- `PolygonCreated`
+- `PolygonUpdated`
+- `PolygonDeleted`
+- `PolygonsCleared`
 
 ## Notas
 

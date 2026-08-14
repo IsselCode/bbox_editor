@@ -129,6 +129,182 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
     _pushMessage(event.toString());
   }
 
+  void _pushPolygonEvent(PolygonEvent event) {
+    final message = switch (event) {
+      PolygonCreated(:final polygon) => 'PolygonCreated(${polygon.id})',
+      PolygonUpdated(:final polygon) => 'PolygonUpdated(${polygon.id})',
+      PolygonDeleted(:final id) => 'PolygonDeleted($id)',
+      PolygonsCleared() => 'PolygonsCleared',
+    };
+    _pushMessage(message);
+  }
+
+  Size _polygonSourceResolution() {
+    Size resolution;
+    try {
+      resolution = _controller.sourceResolution;
+    } catch (_) {
+      resolution = _demoImageSize;
+    }
+    if (resolution.width <= 0 || resolution.height <= 0) {
+      return _demoImageSize;
+    }
+    return resolution;
+  }
+
+  String _coordinateText(double value) => value.roundToDouble() == value
+      ? value.toInt().toString()
+      : value.toStringAsFixed(2);
+
+  double? _parseCoordinate(String? value) {
+    if (value == null) return null;
+    return double.tryParse(value.trim().replaceAll(',', '.'));
+  }
+
+  String? _validateCoordinate(String? value, double maximum) {
+    final coordinate = _parseCoordinate(value);
+    if (coordinate == null || !coordinate.isFinite) {
+      return 'Número requerido';
+    }
+    if (coordinate < 0 || coordinate > maximum) {
+      return 'Rango: 0–${_coordinateText(maximum)}';
+    }
+    return null;
+  }
+
+  Future<void> _showCreatePolygonDialog() async {
+    final resolution = _polygonSourceResolution();
+    final width = resolution.width;
+    final height = resolution.height;
+    final defaults = <Offset>[
+      Offset(width * 0.12, height * 0.16),
+      Offset(width * 0.72, height * 0.13),
+      Offset(width * 0.76, height * 0.72),
+      Offset(width * 0.16, height * 0.76),
+    ];
+    final labels = <String>['topLeft', 'topRight', 'bottomRight', 'bottomLeft'];
+    final coordinateValues = defaults
+        .map((point) => <double>[point.dx, point.dy])
+        .toList(growable: false);
+    final formKey = GlobalKey<FormState>();
+
+    final points = await showDialog<List<Offset>>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Crear polígono'),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Puntos en píxeles del frame '
+                      '(${_coordinateText(width)} × ${_coordinateText(height)})',
+                    ),
+                    const SizedBox(height: 16),
+                    for (var index = 0; index < labels.length; index++) ...[
+                      Text(
+                        '${index + 1}. ${labels[index]}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              key: ValueKey('polygon-${labels[index]}-x'),
+                              initialValue: _coordinateText(defaults[index].dx),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'X',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              validator: (value) =>
+                                  _validateCoordinate(value, width),
+                              onSaved: (value) => coordinateValues[index][0] =
+                                  _parseCoordinate(value)!,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              key: ValueKey('polygon-${labels[index]}-y'),
+                              initialValue: _coordinateText(defaults[index].dy),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              textInputAction: index == labels.length - 1
+                                  ? TextInputAction.done
+                                  : TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Y',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                              validator: (value) =>
+                                  _validateCoordinate(value, height),
+                              onSaved: (value) => coordinateValues[index][1] =
+                                  _parseCoordinate(value)!,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (index != labels.length - 1)
+                        const SizedBox(height: 14),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              key: const ValueKey('cancel-polygon-dialog'),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-polygon-dialog'),
+              onPressed: () {
+                final form = formKey.currentState;
+                if (!(form?.validate() ?? false)) return;
+                form!.save();
+                Navigator.of(dialogContext).pop(
+                  coordinateValues
+                      .map((point) => Offset(point[0], point[1]))
+                      .toList(growable: false),
+                );
+              },
+              child: const Text('Crear'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || points == null) return;
+    await _controller.addPolygon(
+      PolygonEntity(
+        points: points,
+        color: const Color(0xFF22C55E),
+        fillColor: const Color(0x3322C55E),
+        strokeWidth: 3,
+        tag: 'Polygon ${_controller.polygons.value.length + 1}',
+      ),
+    );
+  }
+
   void _pushMessage(String message) {
     setState(() {
       _events.insert(0, message);
@@ -244,7 +420,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
 
   void _setSource(_DemoSource source) {
     if (_source == source) return;
-    _controller.clearAll();
+    _controller.clearAnnotations();
     setState(() => _source = source);
   }
 
@@ -797,6 +973,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
     return SizedBox(
       width: width,
       child: DropdownButtonFormField<T>(
+        isExpanded: true,
         initialValue: value,
         decoration: InputDecoration(
           labelText: label,
@@ -830,6 +1007,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
           controlsConfig: _controlsConfig,
           logs: false,
           onCommitBox: _pushEvent,
+          onCommitPolygon: _pushPolygonEvent,
         );
       case _DemoSource.cameraLive:
         return BBoxEditor(
@@ -842,6 +1020,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
           logs: false,
           onSourceReady: () => _pushMessage('Source -> Camera Live ready'),
           onCommitBox: _pushEvent,
+          onCommitPolygon: _pushPolygonEvent,
         );
       case _DemoSource.cameraCapture:
         return BBoxEditor(
@@ -859,6 +1038,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
             '${frame.sourceResolution.height.toInt()}',
           ),
           onCommitBox: _pushEvent,
+          onCommitPolygon: _pushPolygonEvent,
         );
     }
   }
@@ -878,6 +1058,7 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
                   _controller,
                   _controller.bBoxTool,
                   _controller.boxes,
+                  _controller.polygons,
                 ]),
                 builder: (context, _) {
                   final tool = _controller.bBoxTool.value;
@@ -906,6 +1087,18 @@ class _TouchAutoModeDemoScreenState extends State<_TouchAutoModeDemoScreen> {
                       Text('Source: ${_sourceLabels[_source]}'),
                       Text('Current: ${_toolLabels[tool]}'),
                       Text('Boxes: ${_controller.boxes.value.length}'),
+                      Text('Polygons: ${_controller.polygons.value.length}'),
+                      FilledButton.tonalIcon(
+                        key: const ValueKey('open-polygon-dialog'),
+                        onPressed: _showCreatePolygonDialog,
+                        icon: const Icon(Icons.polyline_outlined),
+                        label: const Text('Create polygon'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _controller.clearPolygons,
+                        icon: const Icon(Icons.layers_clear_outlined),
+                        label: const Text('Clear polygons'),
+                      ),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [

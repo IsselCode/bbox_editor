@@ -1,5 +1,6 @@
 import 'dart:async';
 export 'src/bbox_editor_controls_config.dart';
+export 'src/polygon_entity.dart';
 import 'package:bbox_editor/mjpeg_stream/mjpeg_stream_screen.dart';
 import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
@@ -15,6 +16,7 @@ class BBoxEditor extends StatefulWidget {
   final Future<List<BBoxEntity>> Function(FitCoverMapper mapper)?
   onSourceReadyFutureBoxes;
   final void Function(BBoxEvent event)? onCommitBox;
+  final void Function(PolygonEvent event)? onCommitPolygon;
   final void Function(BBoxFrameData frame)? onLiveFrame;
   final void Function(BBoxFrameData frame)? onCapturedFrame;
 
@@ -40,6 +42,7 @@ class BBoxEditor extends StatefulWidget {
     this.onSourceReady,
     this.onSourceReadyFutureBoxes,
     this.onCommitBox,
+    this.onCommitPolygon,
     this.onLiveFrame,
     this.onCapturedFrame,
     this.logs = true,
@@ -68,6 +71,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
   final Object _sourceFrameOwner = Object();
   final _tc = TransformationController();
   final Set<int> _touchPointers = <int>{};
+  StreamSubscription<PolygonEvent>? _polygonEventsSubscription;
   bool _sourceError = false;
   bool _cameraFrameReady = false;
   bool _loadingInitial = false;
@@ -100,6 +104,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
   void initState() {
     super.initState();
     _tc.addListener(_handleTransformChanged);
+    _listenToPolygonEvents();
     if (widget.sourceResolution != null) {
       _resolvedSourceResolution = widget.sourceResolution;
       _ctrl.sourceResolution = widget.sourceResolution!;
@@ -118,6 +123,10 @@ class _BBoxEditorState extends State<BBoxEditor> {
   @override
   void didUpdateWidget(covariant BBoxEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _polygonEventsSubscription?.cancel();
+      _listenToPolygonEvents();
+    }
     final sourceChanged =
         oldWidget.image != widget.image ||
         oldWidget.stream != widget.stream ||
@@ -147,6 +156,12 @@ class _BBoxEditorState extends State<BBoxEditor> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _listenToPolygonEvents() {
+    _polygonEventsSubscription = _ctrl.polygonEvents.listen((event) {
+      widget.onCommitPolygon?.call(event);
+    });
   }
 
   void _attachSourceFrameAccess() {
@@ -355,6 +370,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
 
   @override
   void dispose() {
+    _polygonEventsSubscription?.cancel();
     _ctrl.detachSourceFrameAccess(_sourceFrameOwner);
     _tc.removeListener(_handleTransformChanged);
     _tc.dispose();
@@ -438,7 +454,7 @@ class _BBoxEditorState extends State<BBoxEditor> {
                           onError: (_) => _handleSourceError(),
                           onResumePreview: () {
                             _ctrl.updateCapturedSourceFrame(null);
-                            _ctrl.clearAll();
+                            _ctrl.clearAnnotations();
                           },
                           onLiveFrame: (frame) {
                             _ctrl.updateCurrentSourceFrame(frame);
