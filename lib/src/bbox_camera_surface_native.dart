@@ -50,10 +50,6 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   bool _encodingFrame = false;
   bool _disposed = false;
   bool _captureInProgress = false;
-  Timer? _focusPressTimer;
-  Offset? _focusIndicator;
-  bool _focusLocked = false;
-  bool _longFocusTriggered = false;
   int _cameraGeneration = 0;
   _LiveFrameRequest? _pendingFrameRequest;
   _LiveFrameRequest? _activeFrameRequest;
@@ -187,18 +183,6 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       initializedController = controller;
 
       await controller.initialize();
-
-      if (widget.config.focusMode == BBoxCameraFocusMode.locked) {
-        await controller.setFocusMode(FocusMode.locked);
-        final focusPoint = widget.config.focusPoint;
-        if (focusPoint != null) {
-          await controller.setFocusPoint(focusPoint);
-        }
-      } else if (widget.config.focusPoint != null) {
-        // Set the autofocus region once during initialization so capture does
-        // not trigger a new focus cycle for every photo.
-        await controller.setFocusPoint(widget.config.focusPoint);
-      }
 
       if (!mounted || _disposed || generation != _cameraGeneration) {
         await controller.dispose();
@@ -656,74 +640,9 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     return ColoredBox(
       color: Colors.black,
       child: Center(
-        child: GestureDetector(
-          onTapDown: (details) {
-            _longFocusTriggered = false;
-            _focusPressTimer?.cancel();
-            _focusPressTimer = Timer(const Duration(seconds: 1), () {
-              _longFocusTriggered = true;
-              _setFocusAt(details.localPosition, lock: true);
-            });
-          },
-          onTapUp: (details) {
-            _focusPressTimer?.cancel();
-            if (!_longFocusTriggered) {
-              _setFocusAt(details.localPosition, lock: false);
-            }
-          },
-          onTapCancel: () => _focusPressTimer?.cancel(),
-          child: Stack(
-            fit: StackFit.passthrough,
-            children: [child, if (_focusIndicator != null) _buildFocusIndicator()],
-          ),
-        ),
+        child: child,
       ),
     );
-  }
-
-  Widget _buildFocusIndicator() {
-    final point = _focusIndicator!;
-    return Positioned(
-      left: point.dx - 28,
-      top: point.dy - 28,
-      child: IgnorePointer(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: _focusLocked ? Colors.greenAccent : Colors.amber,
-              width: 2,
-            ),
-            shape: BoxShape.rectangle,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _setFocusAt(Offset position, {required bool lock}) async {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) return;
-    final renderBox = context.findRenderObject() as RenderBox?;
-    if (renderBox == null || renderBox.size.isEmpty) return;
-    final normalized = Offset(
-      (position.dx / renderBox.size.width).clamp(0.0, 1.0),
-      (position.dy / renderBox.size.height).clamp(0.0, 1.0),
-    );
-    try {
-      await controller.setFocusMode(lock ? FocusMode.locked : FocusMode.auto);
-      await controller.setFocusPoint(normalized);
-      if (mounted) {
-        setState(() {
-          _focusIndicator = position;
-          _focusLocked = lock;
-        });
-      }
-    } catch (_) {
-      // Some cameras do not expose focus controls; preserve normal capture.
-    }
   }
 
   Widget _buildCapturedSurface({
@@ -741,7 +660,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
           child: SizedBox(
             width: width,
             height: height,
-            child: Image.memory(bytes, fit: BoxFit.fill),
+            child: Image.memory(bytes, fit: BoxFit.contain),
           ),
         ),
       ),
@@ -796,7 +715,6 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   @override
   void dispose() {
     _disposed = true;
-    _focusPressTimer?.cancel();
     _cancelFrameRequests();
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.detachCamera(_cameraBindingOwner);

@@ -589,7 +589,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
           child: SizedBox(
             width: sourceSize.width == 0 ? 1 : sourceSize.width,
             height: sourceSize.height == 0 ? 1 : sourceSize.height,
-            child: Image.memory(bytes, fit: BoxFit.fill),
+            child: Image.memory(bytes, fit: BoxFit.contain),
           ),
         ),
       ),
