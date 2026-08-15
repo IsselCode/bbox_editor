@@ -1,6 +1,6 @@
 name: bbox_editor
 description: "A new BBox editor for industrial software in Flutter"
-version: 0.1.13
+version: 0.1.14
 homepage:
 
 environment:

@@ -15,5 +15,7 @@ android {
 }
 
 dependencies {
-    compileOnly 'io.flutter:flutter_embedding_debug:1.0.0'
+    // The plugin is compiled against Flutter's release embedding so it can
+    // also be consumed by applications when assembling a release APK.
+    compileOnly 'io.flutter:flutter_embedding_release:1.0.0'
 }
