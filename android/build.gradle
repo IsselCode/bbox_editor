@@ -15,7 +15,7 @@ android {
 }
 
 dependencies {
-    // The plugin is compiled against Flutter's release embedding so it can
-    // also be consumed by applications when assembling a release APK.
-    compileOnly 'io.flutter:flutter_embedding_release:1.0.0'
+    // Flutter publishes the embedding with an engine-hash version. The
+    // Flutter Gradle plugin supplies the matching embedding to each variant;
+    // declaring a fixed 1.0.0 coordinate makes current Flutter versions fail.
 }
