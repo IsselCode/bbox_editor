@@ -457,6 +457,16 @@ class _BBoxEditorState extends State<BBoxEditor> {
                             _ctrl.clearAnnotations();
                           },
                           onLiveFrame: (frame) {
+                            // El backend calcula los puntos sobre este JPEG,
+                            // no sobre el preview bruto de la cámara. Usa su
+                            // resolución real como referencia del overlay.
+                            if (_resolvedSourceResolution !=
+                                frame.sourceResolution) {
+                              _resolvedSourceResolution =
+                                  frame.sourceResolution;
+                              _ctrl.sourceResolution = frame.sourceResolution;
+                              if (mounted) setState(() {});
+                            }
                             _ctrl.updateCurrentSourceFrame(frame);
                             widget.onLiveFrame?.call(frame);
                           },

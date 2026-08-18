@@ -700,7 +700,21 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     if (controller == null || !controller.value.isInitialized) {
       return const ColoredBox(color: Colors.black);
     }
-    return _buildLiveSurface(CameraPreview(controller));
+    final aspectRatio = controller.value.aspectRatio;
+    return _buildLiveSurface(
+      ClipRect(
+        child: SizedBox.expand(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: 1,
+              height: 1 / aspectRatio,
+              child: CameraPreview(controller),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _disposeController() async {

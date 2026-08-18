@@ -143,7 +143,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface> {
         ..setAttribute('playsinline', '')
         ..style.width = '100%'
         ..style.height = '100%'
-        ..style.objectFit = 'contain'
+        ..style.objectFit = 'cover'
         ..style.backgroundColor = 'black'
         ..style.transformOrigin = 'center'
         ..style.pointerEvents = 'none';
