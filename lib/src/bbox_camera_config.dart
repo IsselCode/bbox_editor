@@ -9,27 +9,18 @@ class BBoxCameraConfig {
   const BBoxCameraConfig({
     this.mode = BBoxCameraMode.livePreview,
     this.lensDirection = BBoxCameraLensDirection.back,
-    this.resolution = BBoxCaptureResolution.hd,
-    @Deprecated('Use resolution instead')
-    BBoxCameraResolutionPreset? resolutionPreset,
+    this.resolutionPreset = BBoxCameraResolutionPreset.high,
     this.enableAudio = false,
-    @Deprecated('Use resolution instead') Size? liveFrameTargetResolution,
+    this.liveFrameTargetResolution,
     this.liveFrameJpegQuality = 85,
-  }) : resolutionPresetOverride = resolutionPreset,
-       liveFrameTargetResolutionOverride = liveFrameTargetResolution;
+  });
 
   final BBoxCameraMode mode;
   final BBoxCameraLensDirection lensDirection;
-  final BBoxCaptureResolution resolution;
-  final BBoxCameraResolutionPreset? resolutionPresetOverride;
+  final BBoxCameraResolutionPreset resolutionPreset;
   final bool enableAudio;
-  final Size? liveFrameTargetResolutionOverride;
+  final Size? liveFrameTargetResolution;
   final int liveFrameJpegQuality;
-
-  BBoxCameraResolutionPreset get resolutionPreset =>
-      resolutionPresetOverride ?? resolution.cameraPreset;
-  Size get liveFrameTargetResolution =>
-      liveFrameTargetResolutionOverride ?? resolution.targetSize;
 
   @override
   bool operator ==(Object other) {
@@ -37,11 +28,9 @@ class BBoxCameraConfig {
     return other is BBoxCameraConfig &&
         other.mode == mode &&
         other.lensDirection == lensDirection &&
-        other.resolution == resolution &&
-        other.resolutionPresetOverride == resolutionPresetOverride &&
+        other.resolutionPreset == resolutionPreset &&
         other.enableAudio == enableAudio &&
-        other.liveFrameTargetResolutionOverride ==
-            liveFrameTargetResolutionOverride &&
+        other.liveFrameTargetResolution == liveFrameTargetResolution &&
         other.liveFrameJpegQuality == liveFrameJpegQuality;
   }
 
@@ -49,10 +38,9 @@ class BBoxCameraConfig {
   int get hashCode => Object.hash(
     mode,
     lensDirection,
-    resolution,
-    resolutionPresetOverride,
+    resolutionPreset,
     enableAudio,
-    liveFrameTargetResolutionOverride,
+    liveFrameTargetResolution,
     liveFrameJpegQuality,
   );
 }
