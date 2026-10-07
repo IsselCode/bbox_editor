@@ -92,6 +92,7 @@ class BBoxEditorController extends ChangeNotifier {
   Object? _cameraOwner;
   VoidCallback? _cameraCapture;
   VoidCallback? _cameraResumePreview;
+  Future<bool> Function()? _cameraRefocus;
 
   Object? _sourceFrameOwner;
   Future<BBoxFrameData?> Function()? _getCurrentSourceFrame;
@@ -129,10 +130,12 @@ class BBoxEditorController extends ChangeNotifier {
     required Object owner,
     required VoidCallback capture,
     required VoidCallback resumePreview,
+    Future<bool> Function()? refocus,
   }) {
     _cameraOwner = owner;
     _cameraCapture = capture;
     _cameraResumePreview = resumePreview;
+    _cameraRefocus = refocus;
     updateCameraState(
       isAttached: true,
       isPreviewActive: false,
@@ -147,6 +150,7 @@ class BBoxEditorController extends ChangeNotifier {
     _cameraOwner = null;
     _cameraCapture = null;
     _cameraResumePreview = null;
+    _cameraRefocus = null;
     updateCameraState(
       isAttached: false,
       isPreviewActive: false,
@@ -302,6 +306,19 @@ class BBoxEditorController extends ChangeNotifier {
   void resumeCameraPreview() {
     if (!cameraCanResumePreview) return;
     _cameraResumePreview?.call();
+  }
+
+  /// Requests autofocus at the center of the native camera preview.
+  ///
+  /// Returns false when the preview is inactive, focus is unsupported, or the
+  /// request could not be applied. A true result does not guarantee sharpness:
+  /// the camera plugin does not expose whether autofocus actually converged.
+  /// Web cameras currently do not support this request.
+  Future<bool> refocusCamera() async {
+    if (!cameraAttached || !cameraPreviewActive || cameraCaptureFrozen) {
+      return false;
+    }
+    return await _cameraRefocus?.call() ?? false;
   }
 
   Future<BBoxFrameData?> getCurrentSourceFrame() async {

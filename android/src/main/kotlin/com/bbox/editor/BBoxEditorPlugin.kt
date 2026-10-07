@@ -1,5 +1,7 @@
 package com.bbox.editor
 
+import android.app.Activity
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
@@ -7,22 +9,30 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.Handler
 import android.os.Looper
+import android.view.Surface
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-class BBoxEditorPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+class BBoxEditorPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware {
     private lateinit var channel: MethodChannel
+    private lateinit var orientationChannel: MethodChannel
+    private var activity: Activity? = null
     private val executor = Executors.newSingleThreadExecutor()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, "bbox_editor/native_encoder")
         channel.setMethodCallHandler(this)
+        orientationChannel = MethodChannel(binding.binaryMessenger, "bbox_editor/camera_orientation")
+        orientationChannel.setMethodCallHandler(this)
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method == "getOrientation") { result.success(currentOrientation()); return }
         if (call.method != "encodeYuv") { result.notImplemented(); return }
         val args = call.arguments as? Map<*, *> ?: run { result.error("ARGS", "Invalid arguments", null); return }
         executor.execute {
@@ -34,6 +44,28 @@ class BBoxEditorPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             }
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun currentOrientation(): String? {
+        val currentActivity = activity ?: return null
+        val rotation = currentActivity.windowManager.defaultDisplay.rotation
+        val upright = rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_90
+        // Match CameraX's UI orientation convention. Rotation alone is not
+        // enough for tablets whose natural screen orientation is landscape.
+        return when (currentActivity.resources.configuration.orientation) {
+            Configuration.ORIENTATION_PORTRAIT -> if (upright) "portraitUp" else "portraitDown"
+            Configuration.ORIENTATION_LANDSCAPE -> if (upright) "landscapeLeft" else "landscapeRight"
+            else -> null
+        }
+    }
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) { activity = binding.activity }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) { activity = binding.activity }
+
+    override fun onDetachedFromActivityForConfigChanges() { activity = null }
+
+    override fun onDetachedFromActivity() { activity = null }
 
     private fun encode(a: Map<*, *>): Map<String, Any> {
         val width = (a["width"] as Number).toInt(); val height = (a["height"] as Number).toInt()
@@ -67,5 +99,10 @@ class BBoxEditorPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         return mapOf("bytes" to out.toByteArray(), "width" to resultWidth, "height" to resultHeight)
     }
 
-    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) { channel.setMethodCallHandler(null); executor.shutdown() }
+    override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        channel.setMethodCallHandler(null)
+        orientationChannel.setMethodCallHandler(null)
+        activity = null
+        executor.shutdown()
+    }
 }

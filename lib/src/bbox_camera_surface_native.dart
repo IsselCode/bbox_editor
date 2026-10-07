@@ -40,8 +40,13 @@ class BBoxCameraSurface extends StatefulWidget {
 
 class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     with WidgetsBindingObserver {
+  static const _orientationChannel = MethodChannel(
+    'bbox_editor/camera_orientation',
+  );
+
   final Object _cameraBindingOwner = Object();
   CameraController? _cameraController;
+  Size? _lastPreviewSize;
   Uint8List? _capturedBytes;
   Size? _capturedSize;
   Object? _error;
@@ -51,6 +56,8 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   bool _disposed = false;
   bool _captureInProgress = false;
   int _cameraGeneration = 0;
+  int _focusGeneration = 0;
+  Future<bool>? _focusRequest;
   _LiveFrameRequest? _pendingFrameRequest;
   _LiveFrameRequest? _activeFrameRequest;
   BBoxFrameData? _lastLiveFrame;
@@ -65,6 +72,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       owner: _cameraBindingOwner,
       capture: _capturePhotoFromController,
       resumePreview: _resumePreviewFromController,
+      refocus: _refocusCamera,
     );
     widget.controller.attachSourceFrameAccess(
       owner: _cameraBindingOwner,
@@ -90,6 +98,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         owner: _cameraBindingOwner,
         capture: _capturePhotoFromController,
         resumePreview: _resumePreviewFromController,
+        refocus: _refocusCamera,
       );
       widget.controller.attachSourceFrameAccess(
         owner: _cameraBindingOwner,
@@ -183,6 +192,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       initializedController = controller;
 
       await controller.initialize();
+      await _initializeCameraOrientation(controller, generation);
 
       if (!mounted || _disposed || generation != _cameraGeneration) {
         await controller.dispose();
@@ -199,6 +209,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         _error = null;
         _initializing = false;
       });
+      controller.addListener(_handleCameraValueChanged);
 
       widget.controller.updateCameraState(
         isAttached: true,
@@ -207,16 +218,19 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
         canCapture: _isCaptureMode,
         canResumePreview: false,
       );
-      final previewSize = controller.value.previewSize;
-      if (previewSize != null) {
-        widget.onFrameReady(_displaySizeFor(previewSize));
-      }
+      _lastPreviewSize = _previewSizeFor(controller.value);
+      widget.onFrameReady(_lastPreviewSize!);
 
       if (_isCaptureMode) {
         widget.onEditableFrameChanged(_capturedBytes != null);
       } else {
         widget.onEditableFrameChanged(true);
       }
+
+      // Starting the Android image stream rebinds the camera use cases, so
+      // request focus only once that is complete. Do not delay the preview
+      // while the lens is adjusting.
+      unawaited(_refocusCamera());
     } catch (error) {
       await initializedController?.dispose();
       if (!mounted) return;
@@ -236,6 +250,90 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     }
   }
 
+  Future<void> _initializeCameraOrientation(
+    CameraController controller,
+    int generation,
+  ) async {
+    if (defaultTargetPlatform != TargetPlatform.android ||
+        !mounted ||
+        _disposed ||
+        generation != _cameraGeneration) {
+      return;
+    }
+
+    // CameraX can wait for a sensor event before publishing its initial UI
+    // orientation. Read it directly so a stationary tablet starts correctly.
+    final initialValue = controller.value;
+    try {
+      final name = await _orientationChannel.invokeMethod<String>(
+        'getOrientation',
+      );
+      if (!mounted ||
+          _disposed ||
+          generation != _cameraGeneration ||
+          !identical(controller.value, initialValue)) {
+        return;
+      }
+      final orientation = switch (name) {
+        'portraitUp' => DeviceOrientation.portraitUp,
+        'portraitDown' => DeviceOrientation.portraitDown,
+        'landscapeLeft' => DeviceOrientation.landscapeLeft,
+        'landscapeRight' => DeviceOrientation.landscapeRight,
+        _ => null,
+      };
+      if (orientation != null) {
+        controller.value = initialValue.copyWith(
+          deviceOrientation: orientation,
+        );
+      }
+    } on MissingPluginException {
+      // Hosts that have not rebuilt the native plugin still receive the
+      // camera plugin's regular orientation updates.
+    } on PlatformException catch (error) {
+      if (kDebugMode) {
+        debugPrint('BBox camera initial orientation unavailable: $error');
+      }
+    }
+  }
+
+  Size _previewSizeFor(CameraValue value) {
+    // Match CameraPreview's orientation precedence, including paused previews
+    // and capture locks, so its texture and our fitted bounds always agree.
+    final orientation = value.isRecordingVideo
+        ? value.recordingOrientation!
+        : value.previewPauseOrientation ??
+              value.lockedCaptureOrientation ??
+              value.deviceOrientation;
+    final size = value.previewSize!;
+    return orientation == DeviceOrientation.landscapeLeft ||
+            orientation == DeviceOrientation.landscapeRight
+        ? size
+        : Size(size.height, size.width);
+  }
+
+  void _handleCameraValueChanged() {
+    final controller = _cameraController;
+    if (_disposed ||
+        controller == null ||
+        !controller.value.isInitialized ||
+        (_isCaptureMode && _capturedBytes != null)) {
+      return;
+    }
+    final size = _previewSizeFor(controller.value);
+    if (size == _lastPreviewSize) return;
+    _lastPreviewSize = size;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _disposed ||
+          !identical(controller, _cameraController) ||
+          size != _lastPreviewSize ||
+          (_isCaptureMode && _capturedBytes != null)) {
+        return;
+      }
+      widget.onFrameReady(size);
+    });
+  }
+
   Future<void> _capturePhoto() async {
     final controller = _cameraController;
     if (_captureInProgress ||
@@ -244,6 +342,10 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       return;
     }
     _captureInProgress = true;
+    // A pending preview-focus completion must not reset focus during capture
+    // or be reused when the user returns to the preview.
+    _focusGeneration++;
+    _focusRequest = null;
     final restartStream = _imageStreamStarted && !_isCaptureMode;
     _cancelFrameRequests();
 
@@ -325,10 +427,10 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       canCapture: _isCaptureMode,
       canResumePreview: false,
     );
-    final previewSize = controller?.value.previewSize;
-    final resolution = previewSize == null
+    final resolution = controller == null || !controller.value.isInitialized
         ? null
-        : _displaySizeFor(previewSize);
+        : _previewSizeFor(controller.value);
+    _lastPreviewSize = resolution;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (controller != null && controller.value.isInitialized) {
@@ -345,6 +447,67 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       await controller.resumePreview();
     } catch (_) {
       // Some platforms do not pause the preview during still capture.
+    }
+    if (identical(controller, _cameraController)) {
+      unawaited(_refocusCamera());
+    }
+  }
+
+  Future<bool> _refocusCamera() {
+    final controller = _cameraController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _disposed ||
+        _captureInProgress ||
+        (_isCaptureMode && _capturedBytes != null)) {
+      return Future.value(false);
+    }
+    // Concurrent requests would cancel one another in CameraX.
+    return _focusRequest ??= _applyAutoFocus(controller, ++_focusGeneration);
+  }
+
+  bool _canApplyFocus(CameraController controller, int generation) {
+    return mounted &&
+        !_disposed &&
+        generation == _focusGeneration &&
+        identical(controller, _cameraController) &&
+        controller.value.isInitialized &&
+        !_captureInProgress &&
+        !(_isCaptureMode && _capturedBytes != null);
+  }
+
+  Future<bool> _applyAutoFocus(
+    CameraController controller,
+    int generation,
+  ) async {
+    try {
+      await controller.setFocusMode(FocusMode.auto);
+      if (!_canApplyFocus(controller, generation) ||
+          !controller.value.focusPointSupported) {
+        return false;
+      }
+
+      try {
+        await controller.setFocusPoint(const Offset(0.5, 0.5));
+      } finally {
+        if (defaultTargetPlatform == TargetPlatform.android &&
+            _canApplyFocus(controller, generation)) {
+          // CameraX tap-to-focus temporarily holds AF in single-shot mode.
+          // Clear the point once the request finishes to restore continuous AF
+          // immediately instead of waiting for its default auto-cancel delay.
+          await controller.setFocusPoint(null);
+        }
+      }
+      return _canApplyFocus(controller, generation);
+    } catch (error) {
+      // Focus is optional: fixed-focus cameras and unsupported drivers must
+      // still provide a working preview and capture.
+      if (kDebugMode && _canApplyFocus(controller, generation)) {
+        debugPrint('BBox camera autofocus unavailable: $error');
+      }
+      return false;
+    } finally {
+      if (generation == _focusGeneration) _focusRequest = null;
     }
   }
 
@@ -446,7 +609,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
           _disposed ||
           generation != _cameraGeneration ||
           (request?.completed ?? false)) {
-      return;
+        return;
       }
       final frame = BBoxFrameData(
         bytes: encoded.bytes,
@@ -543,10 +706,13 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
 
   Future<void> _suspendCamera() async {
     _cameraGeneration++;
+    _focusGeneration++;
+    _focusRequest = null;
     _cancelFrameRequests();
     await _stopImageStream();
     final controller = _cameraController;
     _cameraController = null;
+    controller?.removeListener(_handleCameraValueChanged);
     await controller?.dispose();
   }
 
@@ -588,7 +754,9 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       widget.onResumePreview();
     }
 
-    final previewSize = controller?.value.previewSize;
+    final previewSize = controller == null || !controller.value.isInitialized
+        ? null
+        : _previewSizeFor(controller.value);
     final editable = nextMode == BBoxCameraMode.livePreview;
     widget.controller.updateCameraState(
       isAttached: true,
@@ -597,10 +765,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
       canCapture: !editable,
       canResumePreview: false,
     );
-    _notifyModeTransition(
-      editable: editable,
-      resolution: previewSize == null ? null : _displaySizeFor(previewSize),
-    );
+    _notifyModeTransition(editable: editable, resolution: previewSize);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (controller != null && controller.value.isInitialized) {
@@ -639,9 +804,7 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
   Widget _buildLiveSurface(Widget child) {
     return ColoredBox(
       color: Colors.black,
-      child: Center(
-        child: child,
-      ),
+      child: Center(child: child),
     );
   }
 
@@ -700,29 +863,40 @@ class _BBoxCameraSurfaceState extends State<BBoxCameraSurface>
     if (controller == null || !controller.value.isInitialized) {
       return const ColoredBox(color: Colors.black);
     }
-    final aspectRatio = controller.value.aspectRatio;
-    return _buildLiveSurface(
-      ClipRect(
-        child: SizedBox.expand(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            child: SizedBox(
-              width: 1,
-              height: 1 / aspectRatio,
-              child: CameraPreview(controller),
+    return ValueListenableBuilder<CameraValue>(
+      valueListenable: controller,
+      builder: (context, value, child) {
+        if (!value.isInitialized) {
+          return const ColoredBox(color: Colors.black);
+        }
+        final size = _previewSizeFor(value);
+        return _buildLiveSurface(
+          ClipRect(
+            child: SizedBox.expand(
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: size.width,
+                  height: size.height,
+                  child: CameraPreview(controller),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
   Future<void> _disposeController() async {
     _cameraGeneration++;
+    _focusGeneration++;
+    _focusRequest = null;
     _cancelFrameRequests();
     await _stopImageStream();
     final controller = _cameraController;
     _cameraController = null;
+    controller?.removeListener(_handleCameraValueChanged);
     await controller?.dispose();
   }
 
